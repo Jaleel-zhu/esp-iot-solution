@@ -13,6 +13,7 @@ BLE Services
     Device Information Service <ble_dis>
     Heart Rate Service <ble_hrs>
     Health Thermometer Service <ble_hts>
+    Immediate Alert Service <ble_ias>
     Object Transfer Service <ble_ots>
     TX Power Service <ble_tps>
     User Data Service <ble_uds>

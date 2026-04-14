@@ -1,3 +1,8 @@
+## v1.4.0 - 2026.04.17
+
+Features:
+- IAS: Support Immediate Alert Service
+
 ## v1.3.0 - 2026.03.25
 
 Features:

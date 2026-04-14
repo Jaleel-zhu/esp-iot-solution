@@ -24,7 +24,7 @@ export class WebBase {
 
   constructor(baseUrl: URL) {
     this.base_url = baseUrl;
-  }
+  };
 
   getOneAvailablePort = (ro = true): number | null => {
     if (this.available_ports.length === 0) {

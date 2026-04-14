@@ -20,7 +20,7 @@ menu "USB Hub Dual Camera Demo"
             WiFi Password if WEP/WPA/WPA2 or empty if Open.
 
         config ESP_WIFI_SOFTAP_SSID
-            string "WiFi SoftAP  SSID"
+            string "WiFi SoftAP SSID"
             default "ESP-USB-UVC-Demo"
             help
             softAP SSID (network name) to create or empty for Off.

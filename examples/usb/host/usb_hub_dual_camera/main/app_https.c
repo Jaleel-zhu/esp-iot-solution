@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2024-2025 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2024-2026 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -175,8 +175,29 @@ static esp_err_t get_cameras_handler(httpd_req_t *req)
 static esp_err_t post_active_handler(httpd_req_t *req)
 {
     char content[128];
-    int ret = httpd_req_recv(req, content, sizeof(content));
-    if (ret <= 0) {
+    int received = 0;
+    int remaining = req->content_len;
+
+    if (remaining <= 0 || remaining >= sizeof(content)) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid request body");
+        return ESP_FAIL;
+    }
+
+    while (remaining > 0) {
+        int ret = httpd_req_recv(req, content + received, remaining);
+        if (ret <= 0) {
+            if (ret == HTTPD_SOCK_ERR_TIMEOUT) {
+                continue;
+            }
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to read request body");
+            return ESP_FAIL;
+        }
+        received += ret;
+        remaining -= ret;
+    }
+    content[received] = '\0';
+
+    if (received <= 0) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to read request body");
         return ESP_FAIL;
     }
@@ -198,26 +219,28 @@ static esp_err_t post_active_handler(httpd_req_t *req)
 }
 
 #define PART_BOUNDARY "123456789000000000000987654321"
-static const char *_STREAM_CONTENT_TYPE = "multipart/x-mixed-replace;boundary=" PART_BOUNDARY;
-static const char *_STREAM_BOUNDARY = "\r\n--" PART_BOUNDARY "\r\n";
-static const char *_STREAM_PART = "Content-Type: image/jpeg\r\nAccess-Control-Allow-Origin: *\r\nIndex: %d\r\nContent-Length: %u\r\n\r\n";
+static const char *_STREAM_CONTENT_TYPE = "multipart/x-mixed-replace; boundary=" PART_BOUNDARY;
+static const char *_STREAM_BOUNDARY = "--" PART_BOUNDARY "\r\n";
+static const char *_STREAM_BOUNDARY_CONT = "\r\n--" PART_BOUNDARY "\r\n";
+static const char *_STREAM_PART = "Content-Type: image/jpeg\r\nContent-Length: %u\r\nX-Stream-Index: %d\r\n\r\n";
 
-static esp_err_t transfer_stream_frame(httpd_req_t *req, uvc_host_frame_t *frame, int stream_id)
+static esp_err_t transfer_stream_frame(httpd_req_t *req, uvc_host_frame_t *frame, int stream_id, bool first_frame)
 {
     esp_err_t res = ESP_OK;
-    char *part_buf[128];
+    char part_buf[128];
     if (frame == NULL) {
         ESP_LOGE(TAG, "Camera capture failed");
         res = ESP_FAIL;
     }
 
     if (res == ESP_OK) {
-        res = httpd_resp_send_chunk(req, _STREAM_BOUNDARY, strlen(_STREAM_BOUNDARY));
+        const char *boundary = first_frame ? _STREAM_BOUNDARY : _STREAM_BOUNDARY_CONT;
+        res = httpd_resp_send_chunk(req, boundary, strlen(boundary));
     }
 
     if (res == ESP_OK) {
-        size_t hlen = snprintf((char *)part_buf, 128, _STREAM_PART, stream_id, frame->data_len);
-        res = httpd_resp_send_chunk(req, (const char *)part_buf, hlen);
+        size_t hlen = snprintf(part_buf, sizeof(part_buf), _STREAM_PART, frame->data_len, stream_id);
+        res = httpd_resp_send_chunk(req, part_buf, hlen);
     }
 
     if (res == ESP_OK) {
@@ -246,9 +269,14 @@ static esp_err_t get_stream_handler(httpd_req_t *req)
 
     httpd_resp_set_type(req, _STREAM_CONTENT_TYPE);
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+    httpd_resp_set_hdr(req, "Pragma", "no-cache");
+    httpd_resp_set_hdr(req, "X-Content-Type-Options", "nosniff");
+    httpd_resp_set_hdr(req, "Connection", "close");
 
     int frame_null_cnt = 0;
     int frame_cnt = 0;
+    bool first_sent_frame = true;
 
     while (true) {
         uvc_host_frame_t *frame = app_uvc_get_frame_by_index(stream_id);
@@ -258,7 +286,8 @@ static esp_err_t get_stream_handler(httpd_req_t *req)
             if (frame_cnt < 5) {
                 ++frame_cnt;
             } else {
-                res = transfer_stream_frame(req, frame, stream_id);
+                res = transfer_stream_frame(req, frame, stream_id, first_sent_frame);
+                first_sent_frame = false;
             }
             app_uvc_return_frame_by_index(stream_id, frame);
             if (res != ESP_OK) {

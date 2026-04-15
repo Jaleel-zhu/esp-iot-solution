@@ -63,7 +63,6 @@ const mainStore = useMainStore()
 const props = defineProps<{
   camId: number | string,
   resolution: Resolution,
-  src: URL | null,
 }>()
 
 const cameraStatus = ref<'pending' | 'normal' | 'err'>('pending')
@@ -73,6 +72,7 @@ const capturedImage = ref<URL | string | null>(null)
 const canvas = ref<HTMLCanvasElement | null>(null)
 
 let imageLoadTimeoutId: ReturnType<typeof setTimeout> | null = null
+let quitting = false
 
 const clearImageLoadTimeout = () => {
   if (imageLoadTimeoutId) {
@@ -91,12 +91,25 @@ const setPendingTimeout = () => {
   }, 12000)
 }
 
-const quit = () => {
+const quit = async () => {
+  if (quitting) return
+  quitting = true
   clearImageLoadTimeout()
   cameraImageSrc.value = '/api/404'
+  const deactivateEndpoint = new URL('/api/deactivate', location.href)
+  try {
+    await fetch(deactivateEndpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ id: props.camId })
+    })
+  } catch (err) {
+    console.log(err)
+  }
 
   setTimeout(() => {
-    if (props.src) mainStore.webBase.releasePort(props.src.port || (props.src.protocol === 'https:' ? 443 : 80))
     mainStore.clientCameraActivedList = mainStore.clientCameraActivedList.filter(item => String(item.id) !== String(props.camId))
   }, 100)
 }
@@ -135,15 +148,12 @@ const onImageError = () => {
 }
 
 onBeforeMount(async () => {
-  if (!props.src) {
-    console.log("props.src is null")
-    return
-  }
-  const activeEndPoint = new URL(props.src)
-  activeEndPoint.pathname = '/api/active'
-  activeEndPoint.search = ''
+  const activeEndPoint = new URL('/api/active', location.href)
   fetch(activeEndPoint, {
     method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
     body: JSON.stringify({
       id: props.camId,
       resolution: {
@@ -156,13 +166,9 @@ onBeforeMount(async () => {
   })
     .then(response => {
       if (response.ok) {
-        if (!props.src) {
-          throw new Error("props.src is null")
-        }
         cameraStatus.value = 'pending'
         errMsg.value = null
-        const cameraImageSrcUrl = new URL(props.src)
-        cameraImageSrcUrl.pathname = `/api/stream/${props.camId}`
+        const cameraImageSrcUrl = new URL(`/api/stream/${props.camId}`, location.href)
         cameraImageSrcUrl.searchParams.set('ts', String(Date.now()))
         cameraImageSrc.value = cameraImageSrcUrl.href
         setPendingTimeout()
@@ -180,7 +186,7 @@ onBeforeMount(async () => {
 
 onBeforeUnmount(() => {
   clearImageLoadTimeout()
-  quit()
+  void quit()
 })
 
 </script>

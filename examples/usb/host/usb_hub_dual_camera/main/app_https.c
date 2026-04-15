@@ -6,10 +6,13 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include "esp_log.h"
 #include "esp_http_server.h"
 #include "app_uvc.h"
 #include "esp_spiffs.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 #define TAG "HTTP_SERVER"
 
@@ -26,10 +29,10 @@ typedef struct {
 typedef struct {
     camera_t *cameras;
     int camera_count;
-    int active_camera_count;
 } camera_system_t;
 
 static camera_system_t camera_system = {0};
+static httpd_handle_t s_server = NULL;
 
 static void update_camera_system(void)
 {
@@ -43,13 +46,9 @@ static void update_camera_system(void)
         }
     }
     camera_system.camera_count = connected_num;
-    camera_system.active_camera_count = 0;
     for (int i = 0; i < connected_num; ++i) {
         if (app_uvc_get_dev_frame_info(i, &camera_system.cameras[i].info) == ESP_OK) {
             snprintf(camera_system.cameras[i].id, sizeof(camera_system.cameras[i].id), "%d", camera_system.cameras[i].info.index);
-            if (camera_system.cameras[i].info.if_streaming) {
-                camera_system.active_camera_count++;
-            }
         }
     }
 }
@@ -151,17 +150,21 @@ static esp_err_t get_cameras_handler(httpd_req_t *req)
     len += snprintf(response + len, sizeof(response) - len,
                     "],\"activated\":[");
 
+    bool first_activated = true;
     for (int i = 0; i < camera_system.camera_count; ++i) {
         if (camera_system.cameras[i].info.if_streaming) {
             camera_t *cam = &camera_system.cameras[i];
+            if (!first_activated) {
+                len += snprintf(response + len, sizeof(response) - len, ",");
+            }
 
             len += snprintf(response + len, sizeof(response) - len,
-                            "{\"id\":\"%s\",\"resolution\":{\"width\":%d,\"height\":%d, \"index\":%d}}%s",
+                            "{\"id\":\"%s\",\"resolution\":{\"width\":%d,\"height\":%d, \"index\":%d}}",
                             cam->id,
                             cam->info.resolution[cam->info.active_resolution].width,
                             cam->info.resolution[cam->info.active_resolution].height,
-                            cam->info.active_resolution,
-                            (i < camera_system.active_camera_count - 1) ? "," : "");
+                            cam->info.active_resolution);
+            first_activated = false;
         }
     }
     len += snprintf(response + len, sizeof(response) - len, "]}");
@@ -202,15 +205,62 @@ static esp_err_t post_active_handler(httpd_req_t *req)
         return ESP_FAIL;
     }
 
-    int id = 0, width = 0, height = 0, resolution_index = 0;
-    sscanf(content, "{\"id\":\"%d\",\"resolution\":{\"width\":%d,\"height\":%d,\"index\":%d}}", &id, &width, &height, &resolution_index);
+    int id = 0, resolution_index = 0;
+    sscanf(content, "{\"id\":\"%d\",\"resolution\":{\"width\":%*d,\"height\":%*d,\"index\":%d}}", &id, &resolution_index);
 
     // Open streaming
     printf("id: %d, resolution_index %d\n", id, resolution_index);
-    app_uvc_control_dev_by_index(id, true, resolution_index);
-    camera_system.active_camera_count++;
+    esp_err_t err = app_uvc_control_dev_by_index(id, true, resolution_index);
+    if (err != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to start stream");
+        return ESP_FAIL;
+    }
     // Wait for camera to start streaming
     vTaskDelay(200 / portTICK_PERIOD_MS);
+
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, "{\"code\":200}", HTTPD_RESP_USE_STRLEN);
+    return ESP_OK;
+}
+
+// API: POST /api/deactivate
+static esp_err_t post_deactivate_handler(httpd_req_t *req)
+{
+    char content[64];
+    int received = 0;
+    int remaining = req->content_len;
+
+    if (remaining <= 0 || remaining >= sizeof(content)) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid request body");
+        return ESP_FAIL;
+    }
+
+    while (remaining > 0) {
+        int ret = httpd_req_recv(req, content + received, remaining);
+        if (ret <= 0) {
+            if (ret == HTTPD_SOCK_ERR_TIMEOUT) {
+                continue;
+            }
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to read request body");
+            return ESP_FAIL;
+        }
+        received += ret;
+        remaining -= ret;
+    }
+    content[received] = '\0';
+
+    int id = 0;
+    if (sscanf(content, "{\"id\":\"%d\"}", &id) != 1 && sscanf(content, "{\"id\":%d}", &id) != 1) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid camera id");
+        return ESP_FAIL;
+    }
+
+    esp_err_t err = app_uvc_control_dev_by_index(id, false, -1);
+    if (err != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Camera not found");
+        return ESP_FAIL;
+    }
 
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
     httpd_resp_set_type(req, "application/json");
@@ -251,21 +301,10 @@ static esp_err_t transfer_stream_frame(httpd_req_t *req, uvc_host_frame_t *frame
 }
 
 // API: GET /api/stream/*
-static esp_err_t get_stream_handler(httpd_req_t *req)
+static esp_err_t stream_worker(httpd_req_t *req, int stream_id)
 {
     esp_err_t res = ESP_OK;
-    const char *uri = req->uri;
-    ESP_LOGI(TAG, "Received request for URI: %s", uri);
-
-    const char *last_slash = strrchr(uri, '/');
-    if (last_slash == NULL || *(last_slash + 1) == '\0') {
-        ESP_LOGE(TAG, "Invalid URI format");
-        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Invalid stream ID");
-        return ESP_FAIL;
-    }
-
-    int stream_id = atoi(last_slash + 1);
-    ESP_LOGI(TAG, "Extracted stream ID: %d", stream_id);
+    ESP_LOGI(TAG, "Start stream worker, stream ID: %d", stream_id);
 
     httpd_resp_set_type(req, _STREAM_CONTENT_TYPE);
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
@@ -306,9 +345,67 @@ static esp_err_t get_stream_handler(httpd_req_t *req)
     res = httpd_resp_send_chunk(req, NULL, 0);
 
     app_uvc_control_dev_by_index(stream_id, false, -1);
-    camera_system.active_camera_count--;
-
     return res;
+}
+
+typedef struct {
+    httpd_req_t *req;
+    int stream_id;
+} stream_req_ctx_t;
+
+static void stream_task(void *arg)
+{
+    stream_req_ctx_t *ctx = (stream_req_ctx_t *)arg;
+    if (ctx == NULL || ctx->req == NULL) {
+        vTaskDelete(NULL);
+        return;
+    }
+
+    stream_worker(ctx->req, ctx->stream_id);
+    if (httpd_req_async_handler_complete(ctx->req) != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to complete async stream request");
+    }
+    free(ctx);
+    vTaskDelete(NULL);
+}
+
+static esp_err_t get_stream_handler(httpd_req_t *req)
+{
+    const char *uri = req->uri;
+    ESP_LOGI(TAG, "Received request for URI: %s", uri);
+
+    const char *last_slash = strrchr(uri, '/');
+    if (last_slash == NULL || *(last_slash + 1) == '\0') {
+        ESP_LOGE(TAG, "Invalid URI format");
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Invalid stream ID");
+        return ESP_FAIL;
+    }
+
+    int stream_id = atoi(last_slash + 1);
+    httpd_req_t *async_req = NULL;
+    esp_err_t err = httpd_req_async_handler_begin(req, &async_req);
+    if (err != ESP_OK || async_req == NULL) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Server busy");
+        return ESP_OK;
+    }
+
+    stream_req_ctx_t *ctx = calloc(1, sizeof(stream_req_ctx_t));
+    if (ctx == NULL) {
+        httpd_req_async_handler_complete(async_req);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "No memory");
+        return ESP_OK;
+    }
+    ctx->req = async_req;
+    ctx->stream_id = stream_id;
+
+    if (xTaskCreate(stream_task, "stream_task", 4096, ctx, 5, NULL) != pdPASS) {
+        free(ctx);
+        httpd_req_async_handler_complete(async_req);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to start stream worker");
+        return ESP_OK;
+    }
+
+    return ESP_OK;
 }
 
 static esp_err_t start_webserver(void)
@@ -316,6 +413,8 @@ static esp_err_t start_webserver(void)
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.stack_size = 1024 * 6;
     config.task_priority = 10;
+    config.lru_purge_enable = true;
+    config.max_open_sockets = 7;
     /* Use the URI wildcard matching function in order to
      * allow the same handler to respond to multiple different
      * target URIs which match the wildcard scheme */
@@ -332,6 +431,13 @@ static esp_err_t start_webserver(void)
         .uri = "/api/active",
         .method = HTTP_POST,
         .handler = post_active_handler,
+        .user_ctx = NULL
+    };
+
+    httpd_uri_t deactivate_post = {
+        .uri = "/api/deactivate",
+        .method = HTTP_POST,
+        .handler = post_deactivate_handler,
         .user_ctx = NULL
     };
 
@@ -356,31 +462,14 @@ static esp_err_t start_webserver(void)
         .user_ctx = NULL
     };
 
-    httpd_handle_t server_80 = NULL;
-
-    config.core_id = 0;
-    if (httpd_start(&server_80, &config) == ESP_OK) {
-        httpd_register_uri_handler(server_80, &active_post);
-        httpd_register_uri_handler(server_80, &cameras_get);
-        httpd_register_uri_handler(server_80, &api_404_get);
-        httpd_register_uri_handler(server_80, &stream_get);
-        httpd_register_uri_handler(server_80, &static_handler);
-    } else {
-        goto exit;
-    }
-
-    config.task_priority = 10;
-    config.core_id = 1;
-    config.server_port = 8080;
-    config.ctrl_port += 1;
-    httpd_handle_t server_8080 = NULL;
-
-    if (httpd_start(&server_8080, &config) == ESP_OK) {
-        httpd_register_uri_handler(server_8080, &active_post);
-        httpd_register_uri_handler(server_8080, &cameras_get);
-        httpd_register_uri_handler(server_8080, &api_404_get);
-        httpd_register_uri_handler(server_8080, &stream_get);
-        httpd_register_uri_handler(server_8080, &static_handler);
+    config.core_id = tskNO_AFFINITY;
+    if (httpd_start(&s_server, &config) == ESP_OK) {
+        httpd_register_uri_handler(s_server, &active_post);
+        httpd_register_uri_handler(s_server, &deactivate_post);
+        httpd_register_uri_handler(s_server, &cameras_get);
+        httpd_register_uri_handler(s_server, &api_404_get);
+        httpd_register_uri_handler(s_server, &stream_get);
+        httpd_register_uri_handler(s_server, &static_handler);
     } else {
         goto exit;
     }

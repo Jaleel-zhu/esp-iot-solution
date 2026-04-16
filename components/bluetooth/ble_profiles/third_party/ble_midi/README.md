@@ -33,18 +33,35 @@ idf.py add-dependency "espressif/ble_midi=*"
 
 ### Examples
 
-Create the example from a template:
+In **esp-iot-solution**, two examples live under `examples/bluetooth/ble_profiles/ble_midi/`:
+
+| Directory | BLE role | Summary |
+|-----------|----------|---------|
+| `ble_midi_peripheral` | Peripheral (GATT server) | Advertises BLE‑MIDI, sends MIDI via notifications (host “MIDI Out”). |
+| `ble_midi_central` | Central (GATT client) | Scans, connects, subscribes to notify, prints received BEP/MIDI (host “MIDI In”). Pair with `ble_midi_peripheral` for an end‑to‑end test. |
+
+Create a project from the Component Registry (example name matches the folder name):
 
 ```bash
-idf.py create-project-from-example "espressif/ble_profiles=*:ble_midi"
+idf.py create-project-from-example "espressif/ble_midi=*:ble_midi_peripheral"
+idf.py create-project-from-example "espressif/ble_midi=*:ble_midi_central"
 ```
 
-You can also browse the example sources at `examples/bluetooth/ble_profiles/ble_midi`.  
-The example demonstrates:
+Browse sources in this repository:
+
+- `examples/bluetooth/ble_profiles/ble_midi/ble_midi_peripheral`
+- `examples/bluetooth/ble_profiles/ble_midi/ble_midi_central`
+
+**`ble_midi_peripheral`** demonstrates:
 
 - Registering & publishing the BLE‑MIDI GATT service (including the 128‑bit MIDI Service UUID in Extended Advertising)
 - Sending/receiving BLE‑MIDI Event Packets (BEP) via notifications
 - Aggregating multiple MIDI messages using `esp_ble_midi_send_multi()`
+
+**`ble_midi_central`** demonstrates:
+
+- Scanning for the BLE‑MIDI service UUID (and optionally device name), connecting, GATT discovery, CCCD subscription
+- Feeding notifications into `esp_ble_midi_on_bep_received()` / `esp_ble_midi_register_*_cb()` (do **not** `free()` notify payload in the handler; see that example’s README)
 
 ### Q&A
 

@@ -248,13 +248,21 @@ build_example_bluetooth_ble_htp:
   variables:
     EXAMPLE_DIR: examples/bluetooth/ble_profiles/ble_htp
 
-build_example_bluetooth_ble_midi:
+build_example_bluetooth_ble_midi_peripheral:
   extends:
     - .build_examples_template
-    - .rules:build:example_bluetooth_ble_midi
+    - .rules:build:example_bluetooth_ble_midi_peripheral
     - .build_idf_active_release_version
   variables:
-    EXAMPLE_DIR: examples/bluetooth/ble_profiles/ble_midi
+    EXAMPLE_DIR: examples/bluetooth/ble_profiles/ble_midi/ble_midi_peripheral
+
+build_example_bluetooth_ble_midi_central:
+  extends:
+    - .build_examples_template
+    - .rules:build:example_bluetooth_ble_midi_central
+    - .build_idf_active_release_version
+  variables:
+    EXAMPLE_DIR: examples/bluetooth/ble_profiles/ble_midi/ble_midi_central
 
 build_example_bluetooth_ble_otp_client:
   extends:

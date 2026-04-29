@@ -101,5 +101,6 @@ repos:
       exclude: |
         (?x)^(
           .*.patch|
-          components/sensors/gas/bme690/(bme69x_defs\.h|bme69x\.h|bme69x\.c|LICENSE)
+          components/sensors/gas/bme690/(bme69x_defs\.h|bme69x\.h|bme69x\.c|LICENSE)|
+          components/quickjs-ng/quickjs-ng/.*
         )$

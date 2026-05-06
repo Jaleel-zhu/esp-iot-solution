@@ -58,7 +58,7 @@
 #else
 #include <sys/ioctl.h>
 #include <poll.h>
-#if !defined(__wasi__)
+#if !defined(__wasi__) && !defined(ESP_PLATFORM)
 #include <dlfcn.h>
 #include <termios.h>
 #include <sys/resource.h>
@@ -89,7 +89,7 @@ extern char **environ;
 #include "list.h"
 #include "quickjs-libc.h"
 
-#if JS_HAVE_THREADS
+#if JS_HAVE_THREADS && !defined(ESP_PLATFORM)
 #include "quickjs-c-atomics.h"
 #define USE_WORKER // enable os.Worker
 #endif
@@ -100,6 +100,22 @@ extern char **environ;
 
 #ifndef S_IFIFO
 #define S_IFIFO 0
+#endif
+
+#ifndef S_IFSOCK
+#define S_IFSOCK 0
+#endif
+
+#ifndef S_IFLNK
+#define S_IFLNK 0
+#endif
+
+#ifndef S_ISGID
+#define S_ISGID 0
+#endif
+
+#ifndef S_ISUID
+#define S_ISUID 0
 #endif
 
 #ifndef MAX_SAFE_INTEGER // already defined in amalgamation builds
@@ -715,7 +731,7 @@ fail:
     }
     return m;
 }
-#elif defined(__wasi__)
+#elif defined(__wasi__) || defined(ESP_PLATFORM)
 static JSModuleDef *js_module_loader_so(JSContext *ctx,
                                         const char *module_name)
 {
@@ -1268,7 +1284,7 @@ static void safe_close(FILE *f, bool is_popen)
         return;
     }
     if (is_popen) {
-#if !defined(__wasi__)
+#if !defined(__wasi__) && !defined(ESP_PLATFORM)
         pclose(f);
 #endif
     } else {
@@ -1376,7 +1392,7 @@ fail:
     return JS_EXCEPTION;
 }
 
-#if !defined(__wasi__)
+#if !defined(__wasi__) && !defined(ESP_PLATFORM)
 static JSValue js_std_popen(JSContext *ctx, JSValueConst this_val,
                             int argc, JSValueConst *argv)
 {
@@ -1417,7 +1433,7 @@ fail:
     JS_FreeCString(ctx, mode);
     return JS_EXCEPTION;
 }
-#endif // !defined(__wasi__)
+#endif // !defined(__wasi__) && !defined(ESP_PLATFORM)
 
 static JSValue js_std_fdopen(JSContext *ctx, JSValueConst this_val,
                              int argc, JSValueConst *argv)
@@ -1457,7 +1473,7 @@ fail:
     return JS_EXCEPTION;
 }
 
-#if !defined(__wasi__)
+#if !defined(__wasi__) && !defined(ESP_PLATFORM)
 static JSValue js_std_tmpfile(JSContext *ctx, JSValueConst this_val,
                               int argc, JSValueConst *argv)
 {
@@ -1544,7 +1560,7 @@ static JSValue js_std_file_close(JSContext *ctx, JSValueConst this_val,
     if (is_stdio(s->f)) {
         return JS_ThrowTypeError(ctx, "cannot close stdio");
     }
-#if !defined(__wasi__)
+#if !defined(__wasi__) && !defined(ESP_PLATFORM)
     if (s->is_popen) {
         err = js_get_errno(pclose(s->f));
     } else
@@ -1827,7 +1843,7 @@ static JSValue js_std_file_putByte(JSContext *ctx, JSValueConst this_val,
 }
 
 /* urlGet */
-#if !defined(__wasi__)
+#if !defined(__wasi__) && !defined(ESP_PLATFORM)
 
 #define URL_GET_PROGRAM "curl -s -i --"
 #define URL_GET_BUF_SIZE 4096
@@ -2040,7 +2056,7 @@ fail:
     JS_FreeValue(ctx, response);
     return JS_EXCEPTION;
 }
-#endif // !defined(__wasi__)
+#endif // !defined(__wasi__) && !defined(ESP_PLATFORM)
 
 static JSClassDef js_std_file_class = {
     "FILE",
@@ -2073,7 +2089,7 @@ static const JSCFunctionListEntry js_std_funcs[] = {
     JS_CFUNC_DEF("setenv", 1, js_std_setenv),
     JS_CFUNC_DEF("unsetenv", 1, js_std_unsetenv),
     JS_CFUNC_DEF("getenviron", 1, js_std_getenviron),
-#if !defined(__wasi__)
+#if !defined(__wasi__) && !defined(ESP_PLATFORM)
     JS_CFUNC_DEF("urlGet", 1, js_std_urlGet),
 #endif
     JS_CFUNC_DEF("loadFile", 1, js_std_loadFile),
@@ -2082,7 +2098,7 @@ static const JSCFunctionListEntry js_std_funcs[] = {
 
     /* FILE I/O */
     JS_CFUNC_DEF("open", 2, js_std_open),
-#if !defined(__wasi__)
+#if !defined(__wasi__) && !defined(ESP_PLATFORM)
     JS_CFUNC_DEF("popen", 2, js_std_popen),
     JS_CFUNC_DEF("tmpfile", 0, js_std_tmpfile),
 #endif
@@ -2322,7 +2338,7 @@ static JSValue js_os_ttySetRaw(JSContext *ctx, JSValueConst this_val,
     }
     return JS_UNDEFINED;
 }
-#elif !defined(__wasi__)
+#elif !defined(__wasi__) && !defined(ESP_PLATFORM)
 static JSValue js_os_ttyGetWinSize(JSContext *ctx, JSValueConst this_val,
                                    int argc, JSValueConst *argv)
 {
@@ -2384,7 +2400,7 @@ static JSValue js_os_ttySetRaw(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
-#endif /* !_WIN32 && !__wasi__ */
+#endif /* !_WIN32 && !__wasi__ && !ESP_PLATFORM */
 
 static JSValue js_os_remove(JSContext *ctx, JSValueConst this_val,
                             int argc, JSValueConst *argv)
@@ -2591,7 +2607,7 @@ static JSValue js_os_signal(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
-#if !defined(_WIN32) && !defined(__wasi__)
+#if !defined(_WIN32) && !defined(__wasi__) && !defined(ESP_PLATFORM)
 static JSValue js_os_cputime(JSContext *ctx, JSValueConst this_val,
                              int argc, JSValueConst *argv)
 {
@@ -3382,7 +3398,7 @@ done:
 #endif
 }
 
-#if !defined(_WIN32) && !defined(__wasi__)
+#if !defined(_WIN32) && !defined(__wasi__) && !defined(ESP_PLATFORM)
 #define PAT "XXXXXX"
 #define PSZ (sizeof(PAT)-1)
 static JSValue js_os_mkdstemp(JSContext *ctx, JSValueConst this_val,
@@ -3434,7 +3450,7 @@ static JSValue js_os_mkdstemp(JSContext *ctx, JSValueConst this_val,
 }
 #undef PSZ
 #undef PAT
-#endif // !defined(_WIN32) && !defined(__wasi__)
+#endif // !defined(_WIN32) && !defined(__wasi__) && !defined(ESP_PLATFORM)
 
 #if !defined(_WIN32)
 static int64_t timespec_to_ms(const struct timespec *tv)
@@ -3627,6 +3643,45 @@ static char *realpath(const char *path, char *buf)
 }
 #endif
 
+#if defined(ESP_PLATFORM)
+static char *qjs_esp_realpath(const char *path, char *buf)
+{
+    struct stat st;
+    size_t cwd_len, path_len;
+
+    if (!path || !buf) {
+        errno = EINVAL;
+        return NULL;
+    }
+    if (stat(path, &st) < 0) {
+        return NULL;
+    }
+    if (path[0] == '/') {
+        path_len = strlen(path);
+        if (path_len >= JS__PATH_MAX) {
+            errno = ENAMETOOLONG;
+            return NULL;
+        }
+        memcpy(buf, path, path_len + 1);
+        return buf;
+    }
+    if (!getcwd(buf, JS__PATH_MAX)) {
+        return NULL;
+    }
+    cwd_len = strlen(buf);
+    path_len = strlen(path);
+    if (cwd_len + 1 + path_len >= JS__PATH_MAX) {
+        errno = ENAMETOOLONG;
+        return NULL;
+    }
+    if (cwd_len > 0 && buf[cwd_len - 1] != '/') {
+        buf[cwd_len++] = '/';
+    }
+    memcpy(buf + cwd_len, path, path_len + 1);
+    return buf;
+}
+#endif
+
 #if !defined(__wasi__)
 /* return [path, errorcode] */
 static JSValue js_os_realpath(JSContext *ctx, JSValueConst this_val,
@@ -3640,7 +3695,11 @@ static JSValue js_os_realpath(JSContext *ctx, JSValueConst this_val,
     if (!path) {
         return JS_EXCEPTION;
     }
+#if defined(ESP_PLATFORM)
+    res = qjs_esp_realpath(path, buf);
+#else
     res = realpath(path, buf);
+#endif
     JS_FreeCString(ctx, path);
     if (!res) {
         buf[0] = '\0';
@@ -3652,7 +3711,7 @@ static JSValue js_os_realpath(JSContext *ctx, JSValueConst this_val,
 }
 #endif
 
-#if !defined(_WIN32) && !defined(__wasi__) && !(defined(__APPLE__) && (TARGET_OS_TV || TARGET_OS_WATCH))
+#if !defined(_WIN32) && !defined(__wasi__) && !defined(ESP_PLATFORM) && !(defined(__APPLE__) && (TARGET_OS_TV || TARGET_OS_WATCH))
 static JSValue js_os_symlink(JSContext *ctx, JSValueConst this_val,
                              int argc, JSValueConst *argv)
 {
@@ -4721,6 +4780,8 @@ void js_std_set_worker_new_context_func(JSContext * (*func)(JSRuntime *rt))
 #define OS_PLATFORM "netbsd"
 #elif defined(__FreeBSD__)
 #define OS_PLATFORM "freebsd"
+#elif defined(ESP_PLATFORM)
+#define OS_PLATFORM "esp"
 #elif defined(__wasi__)
 #define OS_PLATFORM "wasi"
 #elif defined(__GNU__)
@@ -4749,7 +4810,7 @@ static const JSCFunctionListEntry js_os_funcs[] = {
     JS_CFUNC_MAGIC_DEF("read", 4, js_os_read_write, 0),
     JS_CFUNC_MAGIC_DEF("write", 4, js_os_read_write, 1),
     JS_CFUNC_DEF("isatty", 1, js_os_isatty),
-#if !defined(__wasi__)
+#if !defined(__wasi__) && !defined(ESP_PLATFORM)
     JS_CFUNC_DEF("ttyGetWinSize", 1, js_os_ttyGetWinSize),
     JS_CFUNC_DEF("ttySetRaw", 1, js_os_ttySetRaw),
 #endif
@@ -4764,7 +4825,7 @@ static const JSCFunctionListEntry js_os_funcs[] = {
     OS_FLAG(SIGILL),
     OS_FLAG(SIGSEGV),
     OS_FLAG(SIGTERM),
-#if !defined(_WIN32) && !defined(__wasi__)
+#if !defined(_WIN32) && !defined(__wasi__) && !defined(ESP_PLATFORM)
     OS_FLAG(SIGQUIT),
     OS_FLAG(SIGPIPE),
     OS_FLAG(SIGALRM),
@@ -4791,7 +4852,7 @@ static const JSCFunctionListEntry js_os_funcs[] = {
     JS_CFUNC_DEF("chdir", 0, js_os_chdir),
     JS_CFUNC_DEF("mkdir", 1, js_os_mkdir),
     JS_CFUNC_DEF("readdir", 1, js_os_readdir),
-#if !defined(_WIN32) && !defined(__wasi__)
+#if !defined(_WIN32) && !defined(__wasi__) && !defined(ESP_PLATFORM)
     JS_CFUNC_MAGIC_DEF("mkdtemp", 0, js_os_mkdstemp, 'd'),
     JS_CFUNC_MAGIC_DEF("mkstemp", 0, js_os_mkdstemp, 's'),
 #endif
@@ -4814,8 +4875,10 @@ static const JSCFunctionListEntry js_os_funcs[] = {
 #if !defined(__wasi__)
     JS_CFUNC_DEF("realpath", 1, js_os_realpath),
 #endif
-#if !defined(_WIN32) && !defined(__wasi__) && !(defined(__APPLE__) && (TARGET_OS_TV || TARGET_OS_WATCH))
+#if !defined(_WIN32) && !defined(__wasi__)
     JS_CFUNC_MAGIC_DEF("lstat", 1, js_os_stat, 1),
+#endif
+#if !defined(_WIN32) && !defined(__wasi__) && !defined(ESP_PLATFORM) && !(defined(__APPLE__) && (TARGET_OS_TV || TARGET_OS_WATCH))
     JS_CFUNC_DEF("symlink", 2, js_os_symlink),
     JS_CFUNC_DEF("readlink", 1, js_os_readlink),
     JS_CFUNC_DEF("exec", 1, js_os_exec),

@@ -1399,6 +1399,14 @@ build_example_mcp_client:
   variables:
     EXAMPLE_DIR: examples/mcp/mcp_client
 
+build_example_quickjs_ng:
+  extends:
+    - .build_examples_template
+    - .rules:build:example_quickjs_ng
+    - .build_idf_ge_than_v5_4
+  variables:
+    EXAMPLE_DIR: examples/quickjs-ng
+
 build_components_ntc_driver_test_apps:
   extends:
     - .build_examples_template

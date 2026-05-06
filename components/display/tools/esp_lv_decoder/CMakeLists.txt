@@ -1,5 +1,5 @@
 set(PRIV_REQUIRES_LIST esp_mm)
-if(IDF_TARGET STREQUAL "esp32p4")
+if(IDF_TARGET STREQUAL "esp32p4" OR IDF_TARGET STREQUAL "esp32s31")
     list(APPEND PRIV_REQUIRES_LIST esp_driver_jpeg)
 endif()
 
@@ -52,7 +52,7 @@ if("libpng" IN_LIST build_components)
     list(APPEND ADD_LIBS idf::libpng)
 endif()
 
-if(IDF_TARGET STREQUAL "esp32p4")
+if(IDF_TARGET STREQUAL "esp32p4" OR IDF_TARGET STREQUAL "esp32s31")
     list(APPEND ADD_LIBS idf::esp_driver_jpeg)
 endif()
 

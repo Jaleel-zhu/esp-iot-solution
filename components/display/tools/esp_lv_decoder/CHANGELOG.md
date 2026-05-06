@@ -1,5 +1,9 @@
 # ChangeLog
 
+## v0.4.0 (2026-05-06)
+
+* Added ESP32-S31 to the supported targets list.
+
 ## v0.3.5 (2026-03-13)
 
 * Fixed PNG decoder not using LVGL image cache by removing the erroneous `no_cache` flag, making PNG consistent with JPEG and QOI cache behavior.

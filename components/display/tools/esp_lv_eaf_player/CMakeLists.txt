@@ -1,8 +1,13 @@
+set(PRIV_REQUIRES_LIST esp_mm)
+if(IDF_TARGET STREQUAL "esp32p4" OR IDF_TARGET STREQUAL "esp32s31")
+    list(APPEND PRIV_REQUIRES_LIST esp_driver_jpeg)
+endif()
+
 idf_component_register(
     SRC_DIRS "src"
     INCLUDE_DIRS "include"
     PRIV_INCLUDE_DIRS "src"
-    PRIV_REQUIRES esp_mm
+    PRIV_REQUIRES ${PRIV_REQUIRES_LIST}
 )
 
 idf_build_get_property(build_components BUILD_COMPONENTS)
@@ -38,7 +43,7 @@ endif()
 
 # Add hardware JPEG decoder support for chips that have it
 idf_build_get_property(target IDF_TARGET)
-if(target STREQUAL "esp32p4")
+if(target STREQUAL "esp32p4" OR target STREQUAL "esp32s31")
     list(APPEND extra_libs idf::esp_driver_jpeg)
     message(STATUS "esp_lv_eaf_player: Hardware JPEG decoder enabled for ${target}")
 endif()

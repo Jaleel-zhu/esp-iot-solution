@@ -278,6 +278,6 @@ sudo dfu-util -d <VendorID> -a 0 -U <OTA_BIN_PATH>
 
 #### 常见问题和错误
 
-1.  各平台 dfu-util 工具安装错误的问题请参考[此链接](https://support.particle.io/hc/en-us/articles/360039251394-Installing-DFU-util) 。
+1.  各平台 dfu-util 工具安装错误的问题请参考[此链接](https://docs.particle.io/archives/installing-dfu-util/) 。
 2. dfu-util 执行时打印 “No DFU capable USB device available”， 这说明 dfu-util 没有探测到 ESP32-S 芯片的 DFU 设备，请确保在配置项已经使能 DFU 功能。在 Ubuntu 中，请确保使用了管理员权限操作。
 sudo apt install dfu-util

@@ -810,9 +810,9 @@ if (esp_lv_adapter_lock(-1) == ESP_OK) {
 
 ## 参考
 
-- [ESP LV FS 组件文档](../../esp_lv_fs/README.md)
-- [ESP LV Decoder 组件文档](../../esp_lv_decoder/README.md)
-- [ESP Mmap Assets 组件文档](../../esp_mmap_assets/README.md)
+- [ESP LV FS 组件文档](../esp_lv_fs/README.md)
+- [ESP LV Decoder 组件文档](../esp_lv_decoder/README.md)
+- [ESP Mmap Assets 组件文档](../esp_mmap_assets/README.md)
 
 ---
 

@@ -4,7 +4,7 @@
 
 This example demonstrates how to play EAF (Emote Animation Format) animations using the `esp_lv_eaf_player` component with LVGL. It shows a complete implementation including animation playback, play/pause control, and filesystem integration.
 
-For detailed EAF usage and API reference, please refer to the [component README](../../../components/display/tools/esp_lv_eaf_player/README.md).
+For detailed EAF usage and API reference, please refer to the [component README](../../../../components/display/tools/esp_lv_eaf_player/README.md).
 
 ## Features
 
@@ -44,4 +44,3 @@ The example displays:
 - Animation frame count at the top
 - EAF animation in the center
 - Play/pause control button at the bottom
-

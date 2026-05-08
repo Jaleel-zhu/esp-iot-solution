@@ -406,7 +406,7 @@ esp_err_t app_uvc_init(void)
     // UVC driver install
     const uvc_host_driver_config_t default_driver_config = {
         .driver_task_stack_size = 5 * 1024,
-        .driver_task_priority = 5,
+        .driver_task_priority = configMAX_PRIORITIES - 1,
         .xCoreID = 1,
         .create_background_task = true,
         .event_cb = driver_event_cb,

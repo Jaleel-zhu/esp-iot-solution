@@ -336,7 +336,7 @@ static esp_err_t stream_worker(httpd_req_t *req, int stream_id)
         } else {
             ESP_LOGI(TAG, "Camera #%d: frame is NULL", stream_id);
             frame_null_cnt++;
-            if (frame_null_cnt > 10) {
+            if (frame_null_cnt > 30) {
                 break;
             }
         }

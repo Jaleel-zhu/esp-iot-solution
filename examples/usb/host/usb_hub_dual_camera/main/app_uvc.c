@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2024-2025 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2024-2026 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -69,6 +69,54 @@ typedef struct {
 static uvc_dev_obj_t p_uvc_dev_obj = {0};
 
 static esp_err_t uvc_open(uvc_dev_t *dev, int frame_index);
+static esp_err_t uvc_cleanup_stream(uvc_dev_t *dev);
+
+static esp_err_t uvc_cleanup_stream(uvc_dev_t *dev)
+{
+    if (dev == NULL || dev->stream == NULL) {
+        if (dev) {
+            dev->if_streaming = false;
+        }
+        return ESP_OK;
+    }
+
+    esp_err_t final_err = ESP_OK;
+
+    if (dev->if_streaming) {
+        esp_err_t err = uvc_host_stream_stop(dev->stream);
+        if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+            ESP_LOGW(TAG, "Cam[%d] stream_stop failed: %s", dev->index, esp_err_to_name(err));
+            final_err = err;
+        }
+    }
+
+    uvc_host_frame_t *frame = NULL;
+    while (xQueueReceive(dev->frame_queue, &frame, 0) == pdTRUE) {
+        esp_err_t err = uvc_host_frame_return(dev->stream, frame);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "Cam[%d] frame_return failed: %s", dev->index, esp_err_to_name(err));
+        }
+    }
+
+    esp_err_t close_err = ESP_FAIL;
+    for (int i = 0; i < 3; i++) {
+        close_err = uvc_host_stream_close(dev->stream);
+        if (close_err == ESP_OK) {
+            break;
+        }
+        ESP_LOGW(TAG, "Cam[%d] stream_close retry %d failed: %s", dev->index, i + 1, esp_err_to_name(close_err));
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+
+    if (close_err != ESP_OK) {
+        ESP_LOGE(TAG, "Cam[%d] stream_close failed permanently: %s", dev->index, esp_err_to_name(close_err));
+        return close_err;
+    }
+
+    dev->stream = NULL;
+    dev->if_streaming = false;
+    return final_err;
+}
 
 static void usb_lib_task(void *arg)
 {
@@ -121,56 +169,83 @@ static void uvc_task(void *arg)
     while (!exit) {
         EventBits_t uxBits = xEventGroupWaitBits(dev->event_group, EVENT_ALL, pdTRUE, pdFALSE, portMAX_DELAY);
 
-        if (uxBits & EVENT_START) {
-            if (dev->if_streaming) {
-                continue;
-            }
-
-            ESP_LOGI(TAG, "Open the uvc device\n");
-            ESP_ERROR_CHECK(uvc_open(dev, dev->require_frame_index));
-
-            uvc_host_stream_format_t vs_format = {
-                .h_res = dev->frame_info[dev->require_frame_index].h_res,
-                .v_res = dev->frame_info[dev->require_frame_index].v_res,
-                .fps = UVC_DESC_DWFRAMEINTERVAL_TO_FPS(dev->frame_info[dev->require_frame_index].default_interval),
-                .format = dev->frame_info[dev->require_frame_index].format
-            };
-            ESP_ERROR_CHECK(uvc_host_stream_format_select(dev->stream, &vs_format));
-            ESP_LOGI(TAG, "uvc begin to stream");
-            ESP_ERROR_CHECK(uvc_host_stream_start(dev->stream));
-            dev->if_streaming = true;
-        }
-
         if (uxBits & EVENT_STOP) {
-            if (!dev->if_streaming) {
-                continue;
-            }
-
             ESP_LOGI(TAG, "uvc end to stream");
-            ESP_ERROR_CHECK(uvc_host_stream_stop(dev->stream));
-            uvc_host_frame_t *frame = NULL;
-            while (xQueueReceive(dev->frame_queue, &frame, 0) == pdTRUE) {
-                uvc_host_frame_return(dev->stream, frame);
+            esp_err_t err = uvc_cleanup_stream(dev);
+            if (err != ESP_OK) {
+                ESP_LOGE(TAG, "Cam[%d] cleanup on stop failed: %s", dev->index, esp_err_to_name(err));
             }
-            uvc_host_stream_close(dev->stream);
-
-            dev->if_streaming = false;
         }
 
         if (uxBits & EVENT_DISCONNECT) {
+            esp_err_t err = uvc_cleanup_stream(dev);
+            if (err != ESP_OK) {
+                ESP_LOGE(TAG, "Cam[%d] cleanup on disconnect failed: %s", dev->index, esp_err_to_name(err));
+            }
             exit = true;
+            continue;
+        }
+
+        if (uxBits & EVENT_START) {
+            if (dev->if_streaming || dev->stream != NULL) {
+                ESP_LOGW(TAG, "Cam[%d] start requested while stream exists, resetting stream first", dev->index);
+                esp_err_t err = uvc_cleanup_stream(dev);
+                if (err != ESP_OK) {
+                    ESP_LOGE(TAG, "Cam[%d] cleanup before start failed: %s", dev->index, esp_err_to_name(err));
+                    continue;
+                }
+                vTaskDelay(pdMS_TO_TICKS(20));
+            }
+
+            int frame_index = dev->require_frame_index;
+            if (frame_index < 0 || frame_index >= dev->frame_info_num) {
+                ESP_LOGE(TAG, "Cam[%d] invalid frame index: %d", dev->index, frame_index);
+                continue;
+            }
+
+            ESP_LOGI(TAG, "Open the uvc device");
+            esp_err_t err = ESP_FAIL;
+            for (int i = 0; i < 3; i++) {
+                err = uvc_open(dev, frame_index);
+                if (err == ESP_OK) {
+                    break;
+                }
+                ESP_LOGW(TAG, "Cam[%d] open retry %d failed: %s", dev->index, i + 1, esp_err_to_name(err));
+                (void)uvc_cleanup_stream(dev);
+                vTaskDelay(pdMS_TO_TICKS(30));
+            }
+            if (err != ESP_OK) {
+                ESP_LOGE(TAG, "Cam[%d] open failed: %s", dev->index, esp_err_to_name(err));
+                continue;
+            }
+
+            uvc_host_stream_format_t vs_format = {
+                .h_res = dev->frame_info[frame_index].h_res,
+                .v_res = dev->frame_info[frame_index].v_res,
+                .fps = UVC_DESC_DWFRAMEINTERVAL_TO_FPS(dev->frame_info[frame_index].default_interval),
+                .format = dev->frame_info[frame_index].format
+            };
+            err = uvc_host_stream_format_select(dev->stream, &vs_format);
+            if (err != ESP_OK) {
+                ESP_LOGE(TAG, "Cam[%d] format_select failed: %s", dev->index, esp_err_to_name(err));
+                (void)uvc_cleanup_stream(dev);
+                continue;
+            }
+
+            ESP_LOGI(TAG, "uvc begin to stream");
+            err = uvc_host_stream_start(dev->stream);
+            if (err != ESP_OK) {
+                ESP_LOGE(TAG, "Cam[%d] stream_start failed: %s", dev->index, esp_err_to_name(err));
+                (void)uvc_cleanup_stream(dev);
+                continue;
+            }
+            dev->if_streaming = true;
         }
     }
 
     // Clean up
     ESP_LOGI(TAG, "uvc task delete");
-    uvc_host_frame_t *frame = NULL;
-    while (xQueueReceive(dev->frame_queue, &frame, 0) == pdTRUE) {
-        uvc_host_frame_return(dev->stream, frame);
-    }
-    if (dev->if_streaming) {
-        uvc_host_stream_close(dev->stream);
-    }
+    (void)uvc_cleanup_stream(dev);
     vQueueDelete(dev->frame_queue);
     SLIST_REMOVE(&p_uvc_dev_obj.uvc_devices_list, dev, uvc_dev_s, list_entry);
     p_uvc_dev_obj.uvc_dev_num--;
@@ -331,7 +406,7 @@ esp_err_t app_uvc_init(void)
     // UVC driver install
     const uvc_host_driver_config_t default_driver_config = {
         .driver_task_stack_size = 5 * 1024,
-        .driver_task_priority = 5,
+        .driver_task_priority = configMAX_PRIORITIES - 1,
         .xCoreID = 1,
         .create_background_task = true,
         .event_cb = driver_event_cb,

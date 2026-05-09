@@ -284,6 +284,6 @@ sudo dfu-util -d <VendorID> -a 0 -U <OTA_BIN_PATH>
 
 #### Common problems
 
-1. Please refer to [this link](https://support.particle.io/hc/en-us/articles/360039251394-Installing-DFU-util) for the installation error of `dfu-util` tool on each platform.
+1. Please refer to [this link](https://docs.particle.io/archives/installing-dfu-util/) for the installation error of `dfu-util` tool on each platform.
 2. "No DFU capable USB device available" means `dfu-util` does not detect the DFU device of the ESP32-S chip. Ensure that the DFU feature is enabled in the configuration item.
    In Linux platform, make sure you are using administrator rights.

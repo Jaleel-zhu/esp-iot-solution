@@ -12,7 +12,7 @@
 
 This example shows how to use SPD1020, GC9B71 or SH8601 display driver from Component manager in esp-idf project. These components are using API provided by `esp_lcd` component. This example will draw a fancy dash board with the LVGL library. This example uses LVGL v9 with the `esp_lvgl_adapter` component for unified LVGL integration.
 
-The `esp_lvgl_adapter` component provides thread-safe LVGL access and display registration. For more porting guides, please refer to [LVGL porting doc](https://docs.lvgl.io/master/porting/index.html).
+The `esp_lvgl_adapter` component provides thread-safe LVGL access and display registration. For more porting guides, please refer to [LVGL porting doc](https://docs.lvgl.io/9.2/porting/index.html).
 
 ## Touch controller
 

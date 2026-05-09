@@ -498,8 +498,7 @@ provided in `esp_mcp_mgr_config_t.transport`.
 
 ## 📖 Documentation
 
-- [User Guide](https://docs.espressif.com/projects/esp-iot-solution/en/latest/mcp/mcp-c-sdk.html)
-- [API Reference](https://docs.espressif.com/projects/esp-iot-solution/en/latest/api-reference/mcp/index.html)
+- [User Guide](https://docs.espressif.com/projects/esp-iot-solution/en/latest/ai/mcp.html)
 
 ## 🤝 Contributing
 

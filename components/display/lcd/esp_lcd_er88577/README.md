@@ -6,7 +6,7 @@ Implementation of the ER88577 LCD controller with esp_lcd component.
 
 | LCD controller | Communication interface | Component name |                                   Link to datasheet                                   |
 | :------------: | :---------------------: | :------------: | :-----------------------------------------------------------------------------------: |
-|     ER88577     |        MIPI-DSI         | esp_lcd_er88577 | [PDF](https://dl.espressif.com/AE/esp-iot-solution/ER88577B_Preliminary_v0.0.1(1)) |
+|     ER88577     |        MIPI-DSI         | esp_lcd_er88577 | [PDF](https://dl.espressif.com/AE/esp-iot-solution/ER88577B_Preliminary_v0.0.1%281%29.pdf) |
 
 **Note**: MIPI-DSI interface only supports ESP-IDF v5.3 and above versions.
 

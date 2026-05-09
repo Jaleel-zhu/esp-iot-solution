@@ -715,8 +715,7 @@ SDK 通过 `esp_mcp_mgr_config_t.transport` 提供的传输函数表 `esp_mcp_tr
 
 ## 📖 文档
 
-- [用户指南](https://docs.espressif.com/projects/esp-iot-solution/zh_CN/latest/mcp/mcp-c-sdk.html)
-- [API 参考](https://docs.espressif.com/projects/esp-iot-solution/zh_CN/latest/api-reference/mcp/index.html)
+- [用户指南](https://docs.espressif.com/projects/esp-iot-solution/zh_CN/latest/ai/mcp.html)
 
 ## 🤝 贡献
 
@@ -784,4 +783,3 @@ CMakeLists.txt not found in project directory /home/username
 ---
 
 **为 ESP32 和 AI 社区用 ❤️ 制作**
-

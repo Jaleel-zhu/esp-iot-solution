@@ -29,6 +29,11 @@ list(APPEND srcs            "hts/src/esp_hts.c")
 list(APPEND include         "hts/include")
 endif()
 
+if(CONFIG_BLE_IAS)
+list(APPEND srcs            "ias/src/esp_ias.c")
+list(APPEND include         "ias/include")
+endif()
+
 if(CONFIG_BLE_TPS)
 list(APPEND srcs            "tps/src/esp_tps.c")
 list(APPEND include         "tps/include")

@@ -245,6 +245,10 @@
   - "components/openai/**/*"
   - "tools/cmake_utilities/package_manager.cmake"
 
+.patterns-components_quickjs_ng: &patterns-components_quickjs_ng
+  - "components/quickjs-ng/**/*"
+  - "tools/cmake_utilities/package_manager.cmake"
+
 .patterns-components_sensors_power_measure: &patterns-components_sensors_power_measure
   - "components/sensors/power_measure/**/*"
   - "tools/cmake_utilities/package_manager.cmake"
@@ -708,6 +712,9 @@
 
 .patterns-example_ota_simple_ota_example: &patterns-example_ota_simple_ota_example
   - "examples/ota/simple_ota_example/**/*"
+
+.patterns-example_quickjs_ng: &patterns-example_quickjs_ng
+  - "examples/quickjs-ng/**/*"
 
 .patterns-example_sensors_sensor_control_led: &patterns-example_sensors_sensor_control_led
   - "examples/sensors/sensor_control_led/**/*"
@@ -1631,6 +1638,18 @@
       changes: *patterns-components_mcp_c_sdk
     - <<: *if-dev-push
       changes: *patterns-example_mcp_client
+
+.rules:build:example_quickjs_ng:
+  rules:
+    - <<: *if-protected
+    - <<: *if-label-build
+    - <<: *if-trigger-job
+    - <<: *if-dev-push
+      changes: *patterns-build_system
+    - <<: *if-dev-push
+      changes: *patterns-components_quickjs_ng
+    - <<: *if-dev-push
+      changes: *patterns-example_quickjs_ng
 
 .rules:build:example_ota_simple_ota_example:
   rules:

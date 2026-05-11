@@ -101,6 +101,7 @@ jobs:
             components/motor/servo;
             components/mcp-c-sdk;
             components/openai;
+            components/quickjs-ng;
             components/sensors/adc/mcp3201;
             components/sensors/angle_sensor/as5600;
             components/sensors/battery_fuel_gauge/adc_battery_estimation;

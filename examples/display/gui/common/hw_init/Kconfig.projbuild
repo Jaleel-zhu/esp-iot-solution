@@ -30,12 +30,12 @@ choice EXAMPLE_LCD_INTERFACE
 
     config EXAMPLE_LCD_INTERFACE_RGB
         bool "RGB Interface (800x480, Touch)"
-        depends on IDF_TARGET_ESP32S3 || IDF_TARGET_ESP32P4
+        depends on IDF_TARGET_ESP32S3 || IDF_TARGET_ESP32P4 || IDF_TARGET_ESP32S31
         help
             RGB parallel interface for medium to high-resolution displays.
             Resolution: 800x480
             Input: Touch panel
-            Requires PSRAM. Available on ESP32-S3 and ESP32-P4.
+            Requires PSRAM. Available on ESP32-S3, ESP32-P4, and ESP32-S31.
 
     config EXAMPLE_LCD_INTERFACE_SPI_WITH_PSRAM
         bool "SPI Interface with PSRAM (320x240, Touch)"

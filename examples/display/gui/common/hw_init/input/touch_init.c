@@ -16,8 +16,13 @@
 #include "esp_lcd_touch_gt1151.h"
 #define HW_LCD_TOUCH_RST                (GPIO_NUM_NC)
 #define HW_LCD_TOUCH_INT                (GPIO_NUM_NC)
+#if CONFIG_IDF_TARGET_ESP32S31
+#define HW_I2C_SDA                      (GPIO_NUM_0)
+#define HW_I2C_SCL                      (GPIO_NUM_1)
+#else
 #define HW_I2C_SDA                      (GPIO_NUM_47)
 #define HW_I2C_SCL                      (GPIO_NUM_48)
+#endif
 #define TOUCH_CONTROLLER_NAME           "GT1151"
 #define TOUCH_ROTATION_TYPE             TOUCH_ROTATION_STANDARD
 #define TOUCH_CONTROLLER_TYPE_GT1151    1

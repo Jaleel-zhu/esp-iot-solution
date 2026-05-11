@@ -2,7 +2,7 @@ include($ENV{IDF_PATH}/tools/cmake/version.cmake)
 
 set(ADAPTER_PRIV_REQ esp_timer esp_mm)
 idf_build_get_property(target IDF_TARGET)
-if(${target} STREQUAL "esp32p4")
+if(${target} STREQUAL "esp32p4" OR ${target} STREQUAL "esp32s31")
     list(APPEND ADAPTER_PRIV_REQ esp_driver_ppa)
 endif()
 

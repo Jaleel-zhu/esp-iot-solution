@@ -376,6 +376,17 @@ static esp_err_t esp_xiaozhi_chat_set_device_state(esp_xiaozhi_chat_t *xiaozhi_c
     return ESP_OK;
 }
 
+static void esp_xiaozhi_chat_clear_mcp_session_state(esp_xiaozhi_chat_t *xiaozhi_chat, const char *session_id)
+{
+    if (!xiaozhi_chat->mcp_mgr_handle) {
+        return;
+    }
+    (void)esp_mcp_mgr_clear_session_state(xiaozhi_chat->mcp_mgr_handle, "__default");
+    if (session_id && session_id[0]) {
+        (void)esp_mcp_mgr_clear_session_state(xiaozhi_chat->mcp_mgr_handle, session_id);
+    }
+}
+
 static esp_err_t esp_xiaozhi_chat_hello_handler(esp_xiaozhi_chat_t *xiaozhi_chat, cJSON *root)
 {
     const cJSON *transport = cJSON_GetObjectItem(root, "transport");
@@ -485,6 +496,9 @@ static esp_err_t esp_xiaozhi_chat_hello_handler(esp_xiaozhi_chat_t *xiaozhi_chat
             }
         }
     }
+
+    esp_xiaozhi_chat_clear_mcp_session_state(xiaozhi_chat, xiaozhi_chat->session_id);
+
     xEventGroupSetBits(xiaozhi_chat->event_group_handle, ESP_XIAOZHI_CHAT_SERVER_HELLO);
 
     return ESP_OK;
@@ -494,6 +508,7 @@ static esp_err_t esp_xiaozhi_chat_goodbye_handler(esp_xiaozhi_chat_t *xiaozhi_ch
 {
     cJSON *session_id = cJSON_GetObjectItem(root, "session_id");
     if (session_id == NULL || strcmp(xiaozhi_chat->session_id, session_id->valuestring) == 0) {
+        esp_xiaozhi_chat_clear_mcp_session_state(xiaozhi_chat, xiaozhi_chat->session_id);
         esp_event_post(ESP_XIAOZHI_CHAT_EVENTS, ESP_XIAOZHI_CHAT_EVENT_SERVER_GOODBYE, NULL, 0, portMAX_DELAY);
     }
 
@@ -526,11 +541,14 @@ static esp_err_t esp_xiaozhi_chat_mcp_handler(esp_xiaozhi_chat_t *xiaozhi_chat, 
 
     ESP_LOGI(TAG, "Received MCP message: %s", payload_mcp);
 
+    const char *mcp_session = xiaozhi_chat->session_id[0] ? xiaozhi_chat->session_id : NULL;
+    (void)esp_mcp_mgr_set_request_context(xiaozhi_chat->mcp_mgr_handle, mcp_session, NULL, true);
     esp_err_t ret = esp_xiaozhi_mcp_handle_message(xiaozhi_chat->mcp_mgr_handle,
                                                    "mcp_server",
                                                    payload_mcp,
                                                    strlen(payload_mcp),
-                                                   xiaozhi_chat->session_id);
+                                                   mcp_session);
+    (void)esp_mcp_mgr_set_request_context(xiaozhi_chat->mcp_mgr_handle, NULL, NULL, false);
 
     cJSON_free(payload_mcp);
 
@@ -1527,6 +1545,7 @@ esp_err_t esp_xiaozhi_chat_close_audio_channel(esp_xiaozhi_chat_handle_t chat_hd
         }
     }
 
+    esp_xiaozhi_chat_clear_mcp_session_state(xiaozhi_chat, xiaozhi_chat->session_id);
     memset(xiaozhi_chat->session_id, 0, sizeof(xiaozhi_chat->session_id));
     esp_xiaozhi_chat_audio_close(xiaozhi_chat);
 

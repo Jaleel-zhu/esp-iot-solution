@@ -1399,8 +1399,7 @@ static esp_err_t esp_mcp_http_client_start(esp_mcp_transport_handle_t handle, vo
     if (mcp_ret == ESP_OK) {
         mcp_ret = esp_http_client_set_header(item->stream_client, "Connection", "keep-alive");
     }
-    strncpy(item->protocol_version, DEFAULT_PROTOCOL_VERSION, sizeof(item->protocol_version) - 1);
-    item->protocol_version[sizeof(item->protocol_version) - 1] = '\0';
+    snprintf(item->protocol_version, sizeof(item->protocol_version), "%s", DEFAULT_PROTOCOL_VERSION);
     if (mcp_ret == ESP_OK) {
         mcp_ret = esp_http_client_set_header(item->request_client, "MCP-Protocol-Version", item->protocol_version);
     }

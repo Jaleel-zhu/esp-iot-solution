@@ -339,16 +339,14 @@ static esp_err_t esp_mcp_http_apply_protocol_version(httpd_req_t *req,
                 xSemaphoreTake(mcp_http->sse_mutex, portMAX_DELAY) == pdTRUE) {
             esp_mcp_http_session_t *session = esp_mcp_http_session_find_locked(mcp_http, session_id);
             if (session && session->protocol_version[0]) {
-                strncpy(buf, session->protocol_version, sizeof(buf) - 1);
-                buf[sizeof(buf) - 1] = '\0';
+                snprintf(buf, sizeof(buf), "%s", session->protocol_version);
                 proto_to_use = buf;
             }
             xSemaphoreGive(mcp_http->sse_mutex);
         }
     }
 
-    strncpy(out_proto, proto_to_use, out_proto_len - 1);
-    out_proto[out_proto_len - 1] = '\0';
+    snprintf(out_proto, out_proto_len, "%s", proto_to_use);
     return ESP_OK;
 }
 
@@ -2690,7 +2688,7 @@ static esp_err_t esp_mcp_http_get_handler(httpd_req_t *req)
     }
     client->sockfd = -1;
     snprintf(client->session_id, sizeof(client->session_id), "%s", session_id);
-    strncpy(client->protocol_version, proto_hdr, sizeof(client->protocol_version) - 1);
+    snprintf(client->protocol_version, sizeof(client->protocol_version), "%s", proto_hdr);
     client->req = async_req;
     client->owner = mcp_http;
     client->sockfd = httpd_req_to_sockfd(async_req);
@@ -3222,10 +3220,8 @@ static esp_err_t esp_mcp_http_post_handler_internal(httpd_req_t *req, bool sse_o
             return ESP_ERR_NO_MEM;
         }
 
-        strncpy(client->session_id, session_id, sizeof(client->session_id) - 1);
-        client->session_id[sizeof(client->session_id) - 1] = '\0';
-        strncpy(client->protocol_version, proto_hdr, sizeof(client->protocol_version) - 1);
-        client->protocol_version[sizeof(client->protocol_version) - 1] = '\0';
+        snprintf(client->session_id, sizeof(client->session_id), "%s", session_id);
+        snprintf(client->protocol_version, sizeof(client->protocol_version), "%s", proto_hdr);
 
         esp_mcp_http_clear_pending_response_hdrs(req);
         ret = esp_mcp_http_validate_headers(req);

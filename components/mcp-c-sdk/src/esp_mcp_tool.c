@@ -393,8 +393,7 @@ esp_err_t esp_mcp_tool_set_task_support(esp_mcp_tool_t *tool, const char *task_s
             strcmp(task_support, "forbidden") != 0) {
         return ESP_ERR_INVALID_ARG;
     }
-    strncpy(tool->task_support, task_support, sizeof(tool->task_support) - 1);
-    tool->task_support[sizeof(tool->task_support) - 1] = '\0';
+    snprintf(tool->task_support, sizeof(tool->task_support), "%s", task_support);
     return ESP_OK;
 }
 

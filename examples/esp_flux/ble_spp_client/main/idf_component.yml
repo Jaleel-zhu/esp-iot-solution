@@ -1,0 +1,8 @@
+dependencies:
+  idf: ">=4.3"
+  esp_flux:
+    version: "*"
+    override_path: "../../../../components/esp_flux"
+  ble_session_manager:
+    version: "*"
+    path: "../../common_components/ble_session_manager"

@@ -620,6 +620,22 @@ build_example_extended_vfs_spi_spi_slave_simple:
   variables:
     EXAMPLE_DIR: examples/extended_vfs/spi/spi_slave_simple
 
+build_example_esp_flux_ble_spp_client:
+  extends:
+    - .build_examples_template
+    - .rules:build:example_esp_flux_ble_spp_client
+    - .build_idf_active_release_version
+  variables:
+    EXAMPLE_DIR: examples/esp_flux/ble_spp_client
+
+build_example_esp_flux_ble_spp_server:
+  extends:
+    - .build_examples_template
+    - .rules:build:example_esp_flux_ble_spp_server
+    - .build_idf_active_release_version
+  variables:
+    EXAMPLE_DIR: examples/esp_flux/ble_spp_server
+
 build_example_get_started_blink:
   extends:
     - .build_examples_template

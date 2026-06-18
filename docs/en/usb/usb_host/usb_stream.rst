@@ -3,6 +3,9 @@ USB Stream Component
 
 :link_to_translation:`zh_CN:[中文]`
 
+.. warning::
+   This component is no longer maintained. Please use `usb_host_uvc <https://components.espressif.com/components/espressif/usb_host_uvc>`_ and `usb_host_uac <https://components.espressif.com/components/espressif/usb_host_uac>`_ instead.
+
 ``usb_stream`` is an USB ``UVC`` + ``UAC`` host driver for ESP32-S2/ESP32-S3, which supports read/write/control multimedia streaming from usb device. For example, at most one UVC + one Microphone + one Speaker streaming can be supported at the same time.
 
 Features:

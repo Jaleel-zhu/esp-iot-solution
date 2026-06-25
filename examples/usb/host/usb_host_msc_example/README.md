@@ -1,11 +1,29 @@
+| Supported Targets | ESP32-P4 | ESP32-S2 | ESP32-S3 | ESP32-S31 |
+| ----------------- | -------- | -------- | -------- | --------- |
+
 # USB Host MSC Example
 
 This example demonstrates how to use USB Host MSC functionality and provides a web page to manage MSC devices.
 
 ## Hardware Requirements
 
-- ESP32 chip that supports USB OTG, such as ESP32-S2, ESP32-S3, ESP32-P4
+- A development board with USB OTG support
 - A USB flash drive formatted as FAT32/exFAT
+
+**Hardware wiring**
+
+```
+┌─────────────┐          ┌─────────────────┐
+│             ┼──────────┼5V               │
+│  USB Disk   ┼──────────┼GND              │
+│             │          │    ESP32-xx     │
+│             │          │                 │
+│             ┼──────────┼USB D+           │
+│             ┼──────────┼USB D-           │
+│             │          │                 │
+└─────────────┘          │                 │
+                         └─────────────────┘
+```
 
 ### exFat Support (Not Enabled by Default)
 

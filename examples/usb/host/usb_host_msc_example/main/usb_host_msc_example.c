@@ -103,9 +103,10 @@ static void print_speed_test_result_table(size_t write_bytes, int64_t write_time
 
 static void msc_speed_test_task(void *arg)
 {
+    esp_msc_host_handle_t host_handle = (esp_msc_host_handle_t)arg;
     FILE *file = NULL;
     uint8_t *buffer = NULL;
-    bool semaphore_taken = false;
+    bool host_locked = false;
     bool speed_test_file_created = false;
     size_t write_bytes = 0;
     size_t read_bytes = 0;
@@ -124,17 +125,12 @@ static void msc_speed_test_task(void *arg)
         buffer[i] = (uint8_t)(i & 0xFF);
     }
 
-    if (msc_read_semaphore == NULL) {
-        ESP_LOGE(TAG, "MSC read semaphore is not initialized");
+    // Hold the MSC host lock so the device cannot be unmounted while the benchmark is accessing FATFS.
+    if (esp_msc_host_lock(host_handle, portMAX_DELAY) != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to lock MSC host");
         goto cleanup;
     }
-
-    // Hold the MSC semaphore so the device cannot be unmounted while the benchmark is accessing FATFS.
-    if (xSemaphoreTake(msc_read_semaphore, portMAX_DELAY) != pdTRUE) {
-        ESP_LOGE(TAG, "Failed to take MSC read semaphore");
-        goto cleanup;
-    }
-    semaphore_taken = true;
+    host_locked = true;
 
     file = fopen(MSC_SPEED_TEST_FILE_PATH, "wb");
     if (file == NULL) {
@@ -192,8 +188,8 @@ cleanup:
     if (speed_test_file_created && remove(MSC_SPEED_TEST_FILE_PATH) != 0 && errno != ENOENT) {
         log_errno_error("Failed to remove speed test file");
     }
-    if (semaphore_taken) {
-        xSemaphoreGive(msc_read_semaphore);
+    if (host_locked) {
+        esp_msc_host_unlock(host_handle);
     }
     free(buffer);
     s_speed_test_task_handle = NULL;
@@ -201,14 +197,14 @@ cleanup:
     vTaskDelete(NULL);
 }
 
-static void start_msc_speed_test(void)
+static void start_msc_speed_test(esp_msc_host_handle_t host_handle)
 {
     if (s_speed_test_task_handle != NULL) {
         ESP_LOGW(TAG, "MSC speed test is already running");
         return;
     }
 
-    BaseType_t ret = xTaskCreate(msc_speed_test_task, "msc_speed_test", MSC_SPEED_TEST_TASK_STACK_SIZE, NULL, MSC_SPEED_TEST_TASK_PRIORITY,
+    BaseType_t ret = xTaskCreate(msc_speed_test_task, "msc_speed_test", MSC_SPEED_TEST_TASK_STACK_SIZE, host_handle, MSC_SPEED_TEST_TASK_PRIORITY,
                                  &s_speed_test_task_handle);
     if (ret != pdPASS) {
         s_speed_test_task_handle = NULL;
@@ -216,7 +212,7 @@ static void start_msc_speed_test(void)
     }
 }
 
-static void esp_msc_host_handler(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data)
+static void esp_msc_host_handler(esp_msc_host_handle_t handle, esp_msc_host_event_t event_id, void *user_ctx)
 {
     switch (event_id) {
     case ESP_MSC_HOST_CONNECT:
@@ -225,15 +221,15 @@ static void esp_msc_host_handler(void *arg, esp_event_base_t event_base, int32_t
     case ESP_MSC_HOST_DISCONNECT:
         ESP_LOGI(TAG, "MSC device disconnected");
         break;
-    case ESP_MSC_HOST_INSTALL:
+    case ESP_MSC_HOST_DEVICE_INSTALL:
         ESP_LOGI(TAG, "MSC device install");
         break;
-    case ESP_MSC_HOST_UNINSTALL:
+    case ESP_MSC_HOST_DEVICE_UNINSTALL:
         ESP_LOGI(TAG, "MSC device uninstall");
         break;
     case ESP_MSC_HOST_VFS_REGISTER:
         ESP_LOGI(TAG, "MSC VFS Register");
-        start_msc_speed_test();
+        start_msc_speed_test(handle);
         break;
     case ESP_MSC_HOST_VFS_UNREGISTER:
         ESP_LOGI(TAG, "MSC device disconnected");
@@ -245,13 +241,12 @@ static void esp_msc_host_handler(void *arg, esp_event_base_t event_base, int32_t
 
 void app_main(void)
 {
-    esp_event_loop_create_default();
-    esp_event_handler_register(ESP_MSC_HOST_EVENT, ESP_EVENT_ANY_ID, &esp_msc_host_handler, NULL);
     esp_msc_host_config_t msc_host_config = {
         .base_path = BASE_PATH,
         .host_driver_config = DEFAULT_MSC_HOST_DRIVER_CONFIG(),
         .vfs_fat_mount_config = DEFAULT_ESP_VFS_FAT_MOUNT_CONFIG(),
-        .host_config = DEFAULT_USB_HOST_CONFIG()
+        .host_config = DEFAULT_USB_HOST_CONFIG(),
+        .event_cb = esp_msc_host_handler,
     };
     esp_msc_host_handle_t host_handle = NULL;
     msc_host_config.host_driver_config.task_priority = 23;

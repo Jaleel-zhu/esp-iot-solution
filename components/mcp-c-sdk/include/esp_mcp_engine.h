@@ -258,6 +258,7 @@ esp_err_t esp_mcp_set_incoming_notification_handler(esp_mcp_t *mcp,
  * @param[in] request_name Logical request name/method
  * @param[in] resp_json Response JSON payload
  * @param[in] user_ctx User context pointer provided when request was sent
+ * @param[in] jsonrpc_request_id JSON-RPC request id associated with this response
  * @return ESP_OK on success
  */
 typedef esp_err_t (*esp_mcp_server_req_cb_t)(int error_code, const char *request_name, const char *resp_json, void *user_ctx,

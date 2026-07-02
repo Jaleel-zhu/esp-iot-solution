@@ -42,6 +42,8 @@ typedef esp_err_t (*esp_ble_ota_raw_ota_begin_cb_t)(uint32_t image_size_bytes);
  * @brief Register OTA flash begin hook (e.g. @c esp_ota_begin).
  *
  * Call from the application before the host may send START. May be NULL to skip.
+ *
+ * @param[in] cb  OTA begin callback, or NULL to clear the hook.
  */
 void esp_ble_ota_raw_set_ota_begin_cb(esp_ble_ota_raw_ota_begin_cb_t cb);
 

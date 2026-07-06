@@ -6,11 +6,13 @@
 
 #include <map>
 #include "esp_hal_bldc_3pwm.h"
+#if SOC_MCPWM_SUPPORTED
 #include "esp_hal_bldc_6pwm.h"
+#endif
 #include "esp_idf_version.h"
 #include "soc/soc_caps.h"
 
-#ifdef CONFIG_SOC_MCPWM_SUPPORTED
+#if SOC_MCPWM_SUPPORTED
 #if (ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(6, 0, 0))
 #include "hal/mcpwm_periph.h"
 #endif
@@ -22,10 +24,16 @@
 #endif
 #endif
 
+#if defined(SOC_LEDC_SUPPORT_APB_CLOCK) && SOC_LEDC_SUPPORT_APB_CLOCK
+#define ESP_SIMPLEFOC_LEDC_CLK_CFG LEDC_USE_APB_CLK
+#else
+#define ESP_SIMPLEFOC_LEDC_CLK_CFG LEDC_AUTO_CLK
+#endif
+
 static std::vector<std::pair<DriverMode, std::tuple<int, int>>> createHardwareResource()
 {
     std::vector<std::pair<DriverMode, std::tuple<int, int>>> resources;
-#ifdef CONFIG_SOC_MCPWM_SUPPORTED
+#if SOC_MCPWM_SUPPORTED
     for (int group_id = 0; group_id < ESP_SIMPLEFOC_MCPWM_GROUPS; group_id++) {
         resources.push_back({DriverMode::mcpwm, {group_id, 0}});
     }
@@ -35,7 +43,7 @@ static std::vector<std::pair<DriverMode, std::tuple<int, int>>> createHardwareRe
         resources.push_back({DriverMode::ledc, {channel, 0}});
     }
 
-#ifdef CONFIG_SOC_MCPWM_SUPPORTED
+#if SOC_MCPWM_SUPPORTED
     printf("BLDC 3PWM hardware resource created: MCPWM groups=%d, LEDC channels=%d\n", ESP_SIMPLEFOC_MCPWM_GROUPS, SOC_LEDC_CHANNEL_NUM);
 #else
     printf("BLDC 3PWM hardware resource created: MCPWM groups=0, LEDC channels=%d\n", SOC_LEDC_CHANNEL_NUM);
@@ -48,7 +56,7 @@ std::vector<std::pair<DriverMode, std::tuple<int, int>>> HardwareResource = crea
 
 enum class DriverSelectionType {
     none = 0,
-#ifdef CONFIG_SOC_MCPWM_SUPPORTED
+#if SOC_MCPWM_SUPPORTED
     mcpwm,
 #endif
     ledc,
@@ -60,7 +68,7 @@ struct DriverSelection {
     std::vector<int> ledc_channels;
 };
 
-#ifdef CONFIG_SOC_MCPWM_SUPPORTED
+#if SOC_MCPWM_SUPPORTED
 extern bool IRAM_ATTR esp_simplefoc_lowside_on_mcpwm_full(mcpwm_timer_handle_t timer,
                                                           const mcpwm_timer_event_data_t *edata,
                                                           void *user_data);
@@ -194,7 +202,7 @@ bool checkLedcAvailable(std::vector<int> ledc_channels)
 DriverSelection checkAvailableDriver()
 {
     DriverSelection selection;
-#ifdef CONFIG_SOC_MCPWM_SUPPORTED
+#if SOC_MCPWM_SUPPORTED
     // find mcpwm
     for (auto &kvp : HardwareResource) {
         if (kvp.first == DriverMode::mcpwm) {
@@ -327,7 +335,7 @@ int BLDCDriver3PWM::init()
         printf("No available Driver.\n");
         return 0;
     }
-#ifdef CONFIG_SOC_MCPWM_SUPPORTED
+#if SOC_MCPWM_SUPPORTED
     if (selection.type == DriverSelectionType::mcpwm) {
         // mcpwm
         driverMode = DriverMode::mcpwm;
@@ -419,11 +427,7 @@ int BLDCDriver3PWM::init()
                 .duty_resolution = _LEDC_DUTY_RES,
                 .timer_num = LEDC_TIMER_0,
                 .freq_hz = _LEDC_FREQUENCY, // Set output frequency at 20 kHz
-#if CONFIG_IDF_TARGET_ESP32C6 || CONFIG_IDF_TARGET_ESP32H2
-                .clk_cfg = LEDC_AUTO_CLK
-#else
-                .clk_cfg = LEDC_USE_APB_CLK
-#endif
+                .clk_cfg = ESP_SIMPLEFOC_LEDC_CLK_CFG
             };
             ESP_ERROR_CHECK(ledc_timer_config(&ledc_timer));
 
@@ -450,7 +454,7 @@ int BLDCDriver3PWM::init()
     return 1;
 }
 
-#ifdef CONFIG_SOC_MCPWM_SUPPORTED
+#if SOC_MCPWM_SUPPORTED
 int BLDCDriver3PWM::init(int _mcpwm_group)
 {
     preparePinsAndVoltage();
@@ -562,11 +566,7 @@ int BLDCDriver3PWM::init(std::vector<int> _ledc_channels)
         .duty_resolution = _LEDC_DUTY_RES,
         .timer_num = LEDC_TIMER_0,
         .freq_hz = _LEDC_FREQUENCY, // Set output frequency at 20 kHz
-#if CONFIG_IDF_TARGET_ESP32C6 || CONFIG_IDF_TARGET_ESP32H2
-        .clk_cfg = LEDC_AUTO_CLK
-#else
-        .clk_cfg = LEDC_USE_APB_CLK
-#endif
+        .clk_cfg = ESP_SIMPLEFOC_LEDC_CLK_CFG
     };
     ESP_ERROR_CHECK(ledc_timer_config(&ledc_timer));
 
@@ -621,7 +621,7 @@ int BLDCDriver3PWM::deinit()
         params = nullptr;
         break;
     }
-#ifdef CONFIG_SOC_MCPWM_SUPPORTED
+#if SOC_MCPWM_SUPPORTED
     case DriverMode::mcpwm:
         for (int i = 0; i < 3; i++) {
             if (mcpwm_del_generator(generator[i]) != ESP_OK) {
@@ -672,7 +672,7 @@ void BLDCDriver3PWM::halPwmWrite()
         ESP_ERROR_CHECK(ledc_set_duty(_LEDC_MODE, static_cast<ledc_channel_t>(ledc_channels[2]), (uint32_t)((mcpwm_period * dc_c))));
         ESP_ERROR_CHECK(ledc_update_duty(_LEDC_MODE, static_cast<ledc_channel_t>(ledc_channels[2])));
         break;
-#ifdef CONFIG_SOC_MCPWM_SUPPORTED
+#if SOC_MCPWM_SUPPORTED
     case DriverMode::mcpwm:
         ESP_ERROR_CHECK(mcpwm_comparator_set_compare_value(comparator[0], (uint32_t)((mcpwm_period * dc_a))));
         ESP_ERROR_CHECK(mcpwm_comparator_set_compare_value(comparator[1], (uint32_t)((mcpwm_period * dc_b))));

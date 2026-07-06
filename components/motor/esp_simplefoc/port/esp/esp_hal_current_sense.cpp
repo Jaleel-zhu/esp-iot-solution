@@ -5,14 +5,16 @@
  */
 
 #include "current_sense/hardware_api.h"
+#include "soc/soc_caps.h"
+#if SOC_MCPWM_SUPPORTED
 #include "esp_hal_bldc_6pwm.h"
+#endif
 #include "esp_adc/adc_oneshot.h"
 #include "esp_adc/adc_cali.h"
 #include "esp_adc/adc_cali_scheme.h"
 #include "esp_private/adc_private.h"
 #include "esp_check.h"
 #include "esp_log.h"
-#include "soc/soc_caps.h"
 
 static const char *TAG = "esp_hal_current_sense";
 static constexpr adc_atten_t ADC_ATTENUATION = ADC_ATTEN_DB_12;
@@ -31,6 +33,7 @@ struct EspInlineCurrentSenseParams {
     EspAdcChannelConfig channels[3];
 };
 
+#if SOC_MCPWM_SUPPORTED
 struct EspLowsideCurrentSenseParams {
     int pins[3] = {ADC_PIN_NOT_SET, ADC_PIN_NOT_SET, ADC_PIN_NOT_SET};
     EspAdcChannelConfig channels[3];
@@ -38,9 +41,12 @@ struct EspLowsideCurrentSenseParams {
     EspMcpwmDriverParams *driver_params = nullptr;
     volatile uint32_t last_timer_event_count = 0;
 };
+#endif
 
 static adc_oneshot_unit_handle_t s_adc_unit_handles[SOC_ADC_PERIPH_NUM] = {};
+#if SOC_MCPWM_SUPPORTED
 static EspLowsideCurrentSenseParams *s_active_lowside_params = nullptr;
+#endif
 
 static int adc_unit_to_index(adc_unit_t unit)
 {
@@ -56,6 +62,7 @@ static int adc_unit_to_index(adc_unit_t unit)
     }
 }
 
+#if SOC_MCPWM_SUPPORTED
 static adc_oneshot_unit_handle_t get_existing_adc_unit_handle(adc_unit_t unit)
 {
     const int unit_index = adc_unit_to_index(unit);
@@ -65,6 +72,7 @@ static adc_oneshot_unit_handle_t get_existing_adc_unit_handle(adc_unit_t unit)
 
     return s_adc_unit_handles[unit_index];
 }
+#endif
 
 static adc_oneshot_unit_handle_t get_adc_unit_handle(adc_unit_t unit)
 {
@@ -128,6 +136,7 @@ static EspAdcChannelConfig *find_adc_channel_config(const int pin, EspInlineCurr
     return nullptr;
 }
 
+#if SOC_MCPWM_SUPPORTED
 static EspAdcChannelConfig *find_adc_channel_config(const int pin, EspLowsideCurrentSenseParams *params)
 {
     for (int i = 0; i < 3; i++) {
@@ -138,6 +147,7 @@ static EspAdcChannelConfig *find_adc_channel_config(const int pin, EspLowsideCur
 
     return nullptr;
 }
+#endif
 
 static bool configure_adc_channel(const int pin, EspAdcChannelConfig *channel_config, bool require_adc1)
 {
@@ -234,6 +244,7 @@ void *_configureADCInline(const void *driver_params, const int pinA, const int p
 
 void *_configureADCLowSide(const void *driver_params, const int pinA, const int pinB, const int pinC)
 {
+#if SOC_MCPWM_SUPPORTED
     if (driver_params == nullptr) {
         ESP_LOGE(TAG, "lowside current sense requires MCPWM driver params");
         return SIMPLEFOC_CURRENT_SENSE_INIT_FAILED;
@@ -261,10 +272,19 @@ void *_configureADCLowSide(const void *driver_params, const int pinA, const int 
 
     ESP_LOGI(TAG, "lowside current sense configured on GPIOs: A=%d B=%d C=%d", pinA, pinB, pinC);
     return params;
+#else
+    _UNUSED(driver_params);
+    _UNUSED(pinA);
+    _UNUSED(pinB);
+    _UNUSED(pinC);
+    ESP_LOGE(TAG, "lowside current sense requires MCPWM support");
+    return SIMPLEFOC_CURRENT_SENSE_INIT_FAILED;
+#endif
 }
 
 void _startADC3PinConversionLowSide()
 {
+#if SOC_MCPWM_SUPPORTED
     if (s_active_lowside_params == nullptr) {
         return;
     }
@@ -294,10 +314,12 @@ void _startADC3PinConversionLowSide()
             s_active_lowside_params->channels[i].raw_value = raw;
         }
     }
+#endif
 }
 
 float _readADCVoltageLowSide(const int pin, const void *cs_params)
 {
+#if SOC_MCPWM_SUPPORTED
     if (cs_params == nullptr) {
         return 0.0f;
     }
@@ -314,10 +336,16 @@ float _readADCVoltageLowSide(const int pin, const void *cs_params)
     }
 
     return voltage_mv / 1000.0f;
+#else
+    _UNUSED(pin);
+    _UNUSED(cs_params);
+    return 0.0f;
+#endif
 }
 
 void _driverSyncLowSide(void *driver_params, void *cs_params)
 {
+#if SOC_MCPWM_SUPPORTED
     if (driver_params == nullptr || cs_params == nullptr) {
         return;
     }
@@ -325,8 +353,13 @@ void _driverSyncLowSide(void *driver_params, void *cs_params)
     EspMcpwmDriverParams *mcpwm_driver_params = (EspMcpwmDriverParams *)driver_params;
     mcpwm_driver_params->lowside_cs_params = cs_params;
     s_active_lowside_params = (EspLowsideCurrentSenseParams *)cs_params;
+#else
+    _UNUSED(driver_params);
+    _UNUSED(cs_params);
+#endif
 }
 
+#if SOC_MCPWM_SUPPORTED
 bool IRAM_ATTR esp_simplefoc_lowside_on_mcpwm_full(mcpwm_timer_handle_t timer,
                                                    const mcpwm_timer_event_data_t *edata,
                                                    void *user_data)
@@ -348,3 +381,4 @@ bool IRAM_ATTR esp_simplefoc_lowside_on_mcpwm_full(mcpwm_timer_handle_t timer,
 
     return false;
 }
+#endif

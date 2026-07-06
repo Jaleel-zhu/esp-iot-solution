@@ -1,5 +1,12 @@
 # ChangeLog
 
+## 1.4.0 - 2026-7-6
+
+### Enhancements:
+* FOC:
+    * Remove the component target whitelist.
+    * Guard MCPWM-only 6PWM and lowside current sense paths with SoC capability checks.
+
 ## 1.3.0 - 2026-5-17
 
 ### Enhancements:

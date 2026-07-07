@@ -80,6 +80,10 @@
   - "components/button/**/*"
   - "tools/cmake_utilities/package_manager.cmake"
 
+.patterns-components_esp_flux: &patterns-components_esp_flux
+  - "components/esp_flux/**/*"
+  - "tools/cmake_utilities/package_manager.cmake"
+
 .patterns-components_dali: &patterns-components_dali
   - "components/dali/**/*"
   - "tools/cmake_utilities/package_manager.cmake"
@@ -781,6 +785,12 @@
 
 .patterns-example_sensors_ntc_temperature_sensor: &patterns-example_sensors_ntc_temperature_sensor
   - "examples/sensors/ntc_temperature_sensor/**/*"
+
+.patterns-example_esp_flux_ble_spp_client: &patterns-example_esp_flux_ble_spp_client
+  - "examples/esp_flux/ble_spp_client/**/*"
+
+.patterns-example_esp_flux_ble_spp_server: &patterns-example_esp_flux_ble_spp_server
+  - "examples/esp_flux/ble_spp_server/**/*"
 
 .patterns-example_sensors_power_measure: &patterns-example_sensors_power_measure
   - "examples/sensors/power_measure/**/*"
@@ -1524,6 +1534,28 @@
       changes: *patterns-components_extended_vfs
     - <<: *if-dev-push
       changes: *patterns-example_extended_vfs_spi_spi_slave_simple
+
+.rules:build:example_esp_flux_ble_spp_client:
+  rules:
+    - <<: *if-protected
+    - <<: *if-label-build
+    - <<: *if-dev-push
+      changes: *patterns-build_system
+    - <<: *if-dev-push
+      changes: *patterns-components_esp_flux
+    - <<: *if-dev-push
+      changes: *patterns-example_esp_flux_ble_spp_client
+
+.rules:build:example_esp_flux_ble_spp_server:
+  rules:
+    - <<: *if-protected
+    - <<: *if-label-build
+    - <<: *if-dev-push
+      changes: *patterns-build_system
+    - <<: *if-dev-push
+      changes: *patterns-components_esp_flux
+    - <<: *if-dev-push
+      changes: *patterns-example_esp_flux_ble_spp_server
 
 .rules:build:example_get_started_blink:
   rules:

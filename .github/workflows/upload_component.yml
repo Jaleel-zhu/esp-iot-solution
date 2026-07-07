@@ -88,6 +88,7 @@ jobs:
             components/display/tools/esp_mmap_assets;
             components/display/tools/esp_painter;
             components/elf_loader;
+            components/esp_flux;
             components/esp_weaver;
             components/esp_xiaozhi;
             components/expander/io_expander/mcp23017;

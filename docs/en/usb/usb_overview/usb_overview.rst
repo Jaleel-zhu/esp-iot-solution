@@ -11,7 +11,7 @@ USB (Universal Serial Bus) is a universal bus standard used to connect hosts and
 
 USB-IF (USB Implementers Forum) is the organization responsible for establishing USB standards. It defines USB standards, including USB 1.1, USB 2.0, USB 3.0, and others. USB-IF specifies protocols for the physical layer, data link layer, transport layer, session layer, presentation layer, and more for the USB interface. It also defines USB Device Class standards, with common device classes such as HID (Human Interface Device), MSC (Mass Storage Class), CDC (Communication Device Class), Audio, Video, and more.
 
-Espressif's ESP32-S2/S3/C3/P4 chips come with built-in USB-OTG or USB-Serial-JTAG peripherals, supporting a variety of USB applications. These include USB multimedia applications, USB communication applications, USB storage applications, USB human interface applications, and more.
+Some Espressif ESP32 series chips come with built-in USB-OTG or USB-Serial-JTAG peripherals (see :ref:`USB Peripheral Support <usb_peripheral-section>`), supporting a variety of USB applications. These include USB multimedia applications, USB communication applications, USB storage applications, USB human interface applications, and more.
 
 
 .. image:: ../../../_static/usb_solutions.png
@@ -84,6 +84,8 @@ USB Full-Speed PHY Introduction
 
 For more information, please refer to the :doc:`USB-PHY Introduction <./usb_phy>`.
 
+.. _usb_peripheral-section:
+
 ESP32-S/P/C Series USB Peripheral Support
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
@@ -108,6 +110,12 @@ ESP32-S/P/C Series USB Peripheral Support
      - √
      - √
      - X
+   * - **ESP32-S31**
+     - √
+     - X
+     - √
+     - X
+     - √
    * - **ESP32-S2**
      - X
      - √
@@ -180,6 +188,7 @@ The ESP32-S3 is equipped with two built-in USB controllers. **USB OTG Full-Speed
 .. image:: ../../../_static/usb/esp32s3_usb.png
    :target: ../../../_static/usb/esp32s3_usb.png
    :alt: esp32s3_usb
+
 
 ESP32-P4 USB Function Overview
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

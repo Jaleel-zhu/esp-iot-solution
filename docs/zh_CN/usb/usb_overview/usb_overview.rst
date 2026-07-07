@@ -11,7 +11,7 @@ USB（Universal Serial Bus）是一种通用的总线标准，用于连接主机
 
 USB IF（USB Implementers Forum）是 USB 标准的制定者，它制定了 USB 标准，包括 USB 1.1、USB 2.0、USB 3.0 等，定义了 USB 接口的物理层、数据链路层、传输层、会话层、表示层等协议，以及 USB 设备类（Device Class）标准，常见的设备类包括 HID（Human Interface Device，人机接口设备）、MSC（Mass Storage Class，大容量存储设备）、CDC（Communication Device Class，通信设备）、Audio、Video 等。
 
-乐鑫 ESP32-S2/S3/C3/P4 等芯片均已内置 USB-OTG 或 USB-Serial-JTAG 外设，支持各种各样的 USB 应用，包括 USB 多媒体类应用，USB 通信类应用，USB 存储类应用，USB 人机交互类应用等。
+乐鑫 ESP32 系列部分芯片已内置 USB-OTG 或 USB-Serial-JTAG 外设（见 :ref:`USB 外设支持情况 <usb_peripheral-section>`），支持各种各样的 USB 应用，包括 USB 多媒体类应用，USB 通信类应用，USB 存储类应用，USB 人机交互类应用等。
 
 
 .. image:: ../../../_static/usb_solutions.png
@@ -84,6 +84,8 @@ USB Full-speed PHY 简介
 
 更多介绍，请参考\ :doc:`USB-PHY 介绍 <./usb_phy>` 。
 
+.. _usb_peripheral-section:
+
 ESP32-S/P/C 系列 USB 外设支持情况
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
@@ -108,6 +110,12 @@ ESP32-S/P/C 系列 USB 外设支持情况
      - √
      - √
      - X
+   * - **ESP32-S31**
+     - √
+     - X
+     - √
+     - X
+     - √
    * - **ESP32-S2**
      - X
      - √
@@ -180,6 +188,7 @@ ESP32-S3 内置两个 USB 控制器，分别是  **USB OTG Full-speed Controller
 .. image:: ../../../_static/usb/esp32s3_usb.png
    :target: ../../../_static/usb/esp32s3_usb.png
    :alt: esp32s3_usb
+
 
 ESP32-P4 USB 功能介绍
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

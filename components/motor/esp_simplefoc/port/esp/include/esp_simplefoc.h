@@ -8,8 +8,11 @@
 #include "esp_platform.h"
 #include "BLDCMotor.h"
 #include "StepperMotor.h"
+#include "soc/soc_caps.h"
 #include "esp_hal_bldc_3pwm.h"
+#if SOC_MCPWM_SUPPORTED
 #include "esp_hal_bldc_6pwm.h"
+#endif
 #include "communication/SimpleFOCDebug.h"
 #include "communication/Commander.h"
 #include "drivers/StepperDriver2PWM.h"

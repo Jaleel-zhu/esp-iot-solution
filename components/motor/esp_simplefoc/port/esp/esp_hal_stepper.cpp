@@ -18,6 +18,11 @@ static const char *TAG = "esp_hal_stepper";
 #define ESP_SIMPLEFOC_STEPPER_LEDC_MODE LEDC_LOW_SPEED_MODE
 #define ESP_SIMPLEFOC_STEPPER_LEDC_DUTY_RES LEDC_TIMER_9_BIT
 #define ESP_SIMPLEFOC_STEPPER_LEDC_DUTY_MAX (511)
+#if defined(SOC_LEDC_SUPPORT_APB_CLOCK) && SOC_LEDC_SUPPORT_APB_CLOCK
+#define ESP_SIMPLEFOC_STEPPER_LEDC_CLK_CFG LEDC_USE_APB_CLK
+#else
+#define ESP_SIMPLEFOC_STEPPER_LEDC_CLK_CFG LEDC_AUTO_CLK
+#endif
 
 struct EspStepperLedcDriverParams {
     int channels[4] = {-1, -1, -1, -1};
@@ -58,11 +63,7 @@ static esp_err_t configure_ledc_timer()
         .duty_resolution = ESP_SIMPLEFOC_STEPPER_LEDC_DUTY_RES,
         .timer_num = ESP_SIMPLEFOC_STEPPER_LEDC_TIMER,
         .freq_hz = ESP_SIMPLEFOC_STEPPER_PWM_FREQUENCY,
-#if CONFIG_IDF_TARGET_ESP32C6 || CONFIG_IDF_TARGET_ESP32H2
-        .clk_cfg = LEDC_AUTO_CLK,
-#else
-        .clk_cfg = LEDC_USE_APB_CLK,
-#endif
+        .clk_cfg = ESP_SIMPLEFOC_STEPPER_LEDC_CLK_CFG,
         .deconfigure = false,
     };
 

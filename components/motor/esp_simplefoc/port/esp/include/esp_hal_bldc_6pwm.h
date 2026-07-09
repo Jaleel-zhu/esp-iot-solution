@@ -5,6 +5,10 @@
  */
 #pragma once
 
+#include "soc/soc_caps.h"
+
+#if SOC_MCPWM_SUPPORTED
+
 #include "BLDCDriver.h"
 #include "foc_utils.h"
 #include "time_utils.h"
@@ -110,3 +114,5 @@ private:
     mcpwm_cmpr_handle_t comparator[3];
     mcpwm_gen_handle_t generator[3][2];
 };
+
+#endif // SOC_MCPWM_SUPPORTED

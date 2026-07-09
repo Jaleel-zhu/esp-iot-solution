@@ -163,10 +163,13 @@ macro(project_so project_name)
                      "${component_dir}/*.c")
 
                 # Filter out test files and build files
+                # NOTE: Use relative path from component_dir to avoid false matches
+                # on parent path components (e.g., workspaces under /test/).
                 foreach(src ${component_sources})
+                    file(RELATIVE_PATH src_rel ${component_dir} ${src})
                     # Skip files in test directories and build directories
-                    if(NOT src MATCHES "/(test|tests|testing)/" AND
-                       NOT src MATCHES "/test_[^/]*\\.c$" AND
+                    if(NOT src_rel MATCHES "^(.*/)?(test|tests|testing)/" AND
+                       NOT src_rel MATCHES "(^|/)test_[^/]*\\.c$" AND
                        NOT src MATCHES "${build_dir}")
                         list(APPEND so_c_sources ${src})
                     endif()

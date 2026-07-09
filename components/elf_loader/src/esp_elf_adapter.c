@@ -34,7 +34,11 @@ void *esp_elf_malloc(uint32_t n, bool exec)
 #ifdef CONFIG_ELF_LOADER_LOAD_PSRAM
     caps = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT;
 #else
+#ifdef MALLOC_CAP_EXEC
     caps = exec ? MALLOC_CAP_EXEC : MALLOC_CAP_8BIT;
+#else
+    caps = MALLOC_CAP_8BIT | MALLOC_CAP_32BIT;
+#endif
 #endif
 #else
 #ifdef CONFIG_ELF_LOADER_LOAD_PSRAM

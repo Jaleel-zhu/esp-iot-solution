@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2023-2026 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -10,6 +10,10 @@
 #include "esp_attr.h"
 #include "esp_heap_caps.h"
 #include "soc/soc.h"
+#if CONFIG_IDF_TARGET_ESP32S31
+#include "esp32s31/rom/cache.h"
+#include "soc/cache_reg.h"
+#endif
 #include "private/elf_platform.h"
 
 #ifdef CONFIG_ELF_LOADER_LOAD_PSRAM
@@ -103,22 +107,31 @@ uintptr_t elf_remap_text(esp_elf_t *elf, uintptr_t sym)
  * @return None
  */
 #ifdef CONFIG_ELF_LOADER_LOAD_PSRAM
-void IRAM_ATTR esp_elf_arch_flush(void)
+void IRAM_ATTR esp_elf_arch_flush(uint32_t addr, uint32_t size)
 {
     extern void spi_flash_disable_interrupts_caches_and_other_cpu(void);
     extern void spi_flash_enable_interrupts_caches_and_other_cpu(void);
 
 #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
-    extern void Cache_WriteBack_All(void);
 
+#if CONFIG_IDF_TARGET_ESP32S31
+    Cache_WriteBack_Addr(CACHE_MAP_L1_DCACHE, addr, size);
+    spi_flash_disable_interrupts_caches_and_other_cpu();
+    Cache_Invalidate_Addr(CACHE_MAP_L1_ICACHE_MASK, addr, size);
+    spi_flash_enable_interrupts_caches_and_other_cpu();
+    REG_CLR_BIT(CACHE_L1_ICACHE_CTRL_REG, CACHE_L1_ICACHE_SHUT_IBUS1);
+#else
+    extern void Cache_WriteBack_All(void);
     Cache_WriteBack_All();
+    spi_flash_disable_interrupts_caches_and_other_cpu();
+    spi_flash_enable_interrupts_caches_and_other_cpu();
+#endif
 #else
     void esp_spiram_writeback_cache(void);
 
     esp_spiram_writeback_cache();
-#endif
-
     spi_flash_disable_interrupts_caches_and_other_cpu();
     spi_flash_enable_interrupts_caches_and_other_cpu();
+#endif
 }
 #endif

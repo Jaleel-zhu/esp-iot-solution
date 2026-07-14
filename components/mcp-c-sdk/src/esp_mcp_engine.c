@@ -975,21 +975,19 @@ static esp_err_t esp_mcp_reply_result_with_related_task(esp_mcp_t *mcp,
     bool saved_has_related_task = mcp->has_related_task;
     char saved_related_task_id[sizeof(mcp->related_task_id)] = {0};
     if (saved_has_related_task) {
-        strncpy(saved_related_task_id, mcp->related_task_id, sizeof(saved_related_task_id) - 1);
+        esp_mcp_copy_str(saved_related_task_id, sizeof(saved_related_task_id), mcp->related_task_id);
     }
 
     if (task_id && task_id[0]) {
         mcp->has_related_task = true;
-        strncpy(mcp->related_task_id, task_id, sizeof(mcp->related_task_id) - 1);
-        mcp->related_task_id[sizeof(mcp->related_task_id) - 1] = '\0';
+        esp_mcp_copy_str(mcp->related_task_id, sizeof(mcp->related_task_id), task_id);
     }
 
     esp_err_t ret = esp_mcp_reply_result(mcp, id, result);
 
     mcp->has_related_task = saved_has_related_task;
     if (saved_has_related_task) {
-        strncpy(mcp->related_task_id, saved_related_task_id, sizeof(mcp->related_task_id) - 1);
-        mcp->related_task_id[sizeof(mcp->related_task_id) - 1] = '\0';
+        esp_mcp_copy_str(mcp->related_task_id, sizeof(mcp->related_task_id), saved_related_task_id);
     } else {
         mcp->related_task_id[0] = '\0';
     }
@@ -3087,6 +3085,7 @@ typedef struct {
     cJSON *array;
     const char *cursor;
     char *next_cursor;
+    size_t next_cursor_cap;
     bool found_cursor;
     bool should_break;
     size_t count;
@@ -3116,8 +3115,7 @@ static esp_err_t esp_mcp_tasks_list_cb(esp_mcp_task_t *task, void *arg)
     }
 
     if (ctx->max_count > 0 && ctx->count >= ctx->max_count) {
-        strncpy(ctx->next_cursor, task_id, 255);
-        ctx->next_cursor[255] = '\0';
+        esp_mcp_copy_str(ctx->next_cursor, ctx->next_cursor_cap, task_id);
         ctx->should_break = true;
         return ESP_OK;
     }
@@ -3152,8 +3150,7 @@ static esp_err_t esp_mcp_handle_tasks_list(esp_mcp_t *mcp, const cJSON *params, 
         return parse_ret;
     }
     if (cursor_value) {
-        strncpy(cursor_str, cursor_value, sizeof(cursor_str) - 1);
-        cursor_str[sizeof(cursor_str) - 1] = '\0';
+        esp_mcp_copy_str(cursor_str, sizeof(cursor_str), cursor_value);
     }
 
     cJSON *result = cJSON_CreateObject();
@@ -3174,6 +3171,7 @@ static esp_err_t esp_mcp_handle_tasks_list(esp_mcp_t *mcp, const cJSON *params, 
             .array = arr,
             .cursor = cursor_str[0] ? cursor_str : NULL,
             .next_cursor = next_cursor,
+            .next_cursor_cap = sizeof(next_cursor),
             .found_cursor = (cursor_str[0] == '\0'),
             .should_break = false,
             .count = 0,

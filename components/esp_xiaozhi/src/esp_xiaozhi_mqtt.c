@@ -5,6 +5,9 @@
  */
 
 #include <string.h>
+#include <strings.h>
+#include <stdlib.h>
+#include <inttypes.h>
 #include <esp_check.h>
 #include <esp_log.h>
 #include <mqtt_client.h>
@@ -38,6 +41,91 @@ static esp_err_t esp_xiaozhi_mqtt_map_missing_config_error(esp_err_t err, const 
         return ESP_ERR_NOT_FOUND;
     }
     return err;
+}
+
+static esp_err_t esp_xiaozhi_mqtt_parse_endpoint(char *endpoint,
+                                                 const char **host,
+                                                 uint32_t *port,
+                                                 esp_mqtt_transport_t *transport)
+{
+    ESP_RETURN_ON_FALSE(endpoint && host && port && transport,
+                        ESP_ERR_INVALID_ARG, TAG, "Invalid endpoint arguments");
+
+    char *authority = endpoint;
+    bool transport_explicit = false;
+    if (strncasecmp(authority, "mqtt://", strlen("mqtt://")) == 0) {
+        authority += strlen("mqtt://");
+        *transport = MQTT_TRANSPORT_OVER_TCP;
+        *port = 1883;
+        transport_explicit = true;
+    } else if (strncasecmp(authority, "tcp://", strlen("tcp://")) == 0) {
+        authority += strlen("tcp://");
+        *transport = MQTT_TRANSPORT_OVER_TCP;
+        *port = 1883;
+        transport_explicit = true;
+    } else if (strncasecmp(authority, "mqtts://", strlen("mqtts://")) == 0) {
+        authority += strlen("mqtts://");
+        *transport = MQTT_TRANSPORT_OVER_SSL;
+        *port = ESP_XIAOZHI_MQTT_DEFAULT_PORT;
+        transport_explicit = true;
+    } else if (strncasecmp(authority, "ssl://", strlen("ssl://")) == 0) {
+        authority += strlen("ssl://");
+        *transport = MQTT_TRANSPORT_OVER_SSL;
+        *port = ESP_XIAOZHI_MQTT_DEFAULT_PORT;
+        transport_explicit = true;
+    } else {
+        ESP_RETURN_ON_FALSE(strstr(authority, "://") == NULL,
+                            ESP_ERR_INVALID_ARG, TAG, "Unsupported MQTT endpoint scheme: %s", endpoint);
+        *transport = MQTT_TRANSPORT_OVER_SSL;
+        *port = ESP_XIAOZHI_MQTT_DEFAULT_PORT;
+    }
+
+    ESP_RETURN_ON_FALSE(*authority != '\0', ESP_ERR_INVALID_ARG, TAG, "MQTT endpoint host is empty");
+    ESP_RETURN_ON_FALSE(strpbrk(authority, "/?#") == NULL,
+                        ESP_ERR_INVALID_ARG, TAG, "MQTT endpoint must not contain path, query, or fragment");
+
+    char *port_text = NULL;
+    if (*authority == '[') {
+        /* Bracketed IPv6 endpoint: [2001:db8::1]:8883 */
+        char *closing_bracket = strchr(authority, ']');
+        ESP_RETURN_ON_FALSE(closing_bracket, ESP_ERR_INVALID_ARG, TAG, "Invalid bracketed IPv6 endpoint");
+        if (closing_bracket[1] == ':') {
+            port_text = closing_bracket + 2;
+        } else {
+            ESP_RETURN_ON_FALSE(closing_bracket[1] == '\0',
+                                ESP_ERR_INVALID_ARG, TAG, "Invalid characters after IPv6 host");
+        }
+        *closing_bracket = '\0';
+        *host = authority + 1;
+    } else {
+        char *colon = strrchr(authority, ':');
+        if (colon) {
+            ESP_RETURN_ON_FALSE(strchr(authority, ':') == colon,
+                                ESP_ERR_INVALID_ARG, TAG, "IPv6 address must be enclosed in brackets");
+            port_text = colon + 1;
+            *colon = '\0';
+        }
+        *host = authority;
+    }
+
+    ESP_RETURN_ON_FALSE(**host != '\0', ESP_ERR_INVALID_ARG, TAG, "MQTT endpoint host is empty");
+    if (port_text) {
+        char *end = NULL;
+        unsigned long parsed_port = strtoul(port_text, &end, 10);
+        ESP_RETURN_ON_FALSE(*port_text != '\0' && end && *end == '\0' &&
+                            parsed_port > 0 && parsed_port <= UINT16_MAX,
+                            ESP_ERR_INVALID_ARG, TAG, "Invalid MQTT endpoint port: %s", port_text);
+        *port = (uint32_t)parsed_port;
+
+        /* For a bare host:port, use the standard ports to infer transport.
+         * A custom TLS port should be made explicit with mqtts:// or ssl://. */
+        if (!transport_explicit) {
+            *transport = (*port == ESP_XIAOZHI_MQTT_DEFAULT_PORT) ?
+                         MQTT_TRANSPORT_OVER_SSL : MQTT_TRANSPORT_OVER_TCP;
+        }
+    }
+
+    return ESP_OK;
 }
 
 static void esp_xiaozhi_mqtt_event(void *handler_args, esp_event_base_t base, int32_t event_id, void *event_data)
@@ -203,15 +291,18 @@ esp_err_t esp_xiaozhi_mqtt_start(esp_xiaozhi_mqtt_handle_t handle)
     esp_xiaozhi_chat_keystore_deinit(&xiaozhi_chat_keystore);
     ESP_RETURN_ON_FALSE(strlen(endpoint) > 0, ESP_ERR_NOT_FOUND, TAG, "MQTT endpoint is not specified");
 
+    const char *host = NULL;
+    uint32_t port = 0;
+    esp_mqtt_transport_t transport = MQTT_TRANSPORT_UNKNOWN;
+    ret = esp_xiaozhi_mqtt_parse_endpoint(endpoint, &host, &port, &transport);
+    ESP_RETURN_ON_ERROR(ret, TAG, "Failed to parse MQTT endpoint");
+
     esp_mqtt_client_config_t mqtt_cfg = {
         .broker = {
             .address = {
-                .hostname = endpoint,
-                .port = ESP_XIAOZHI_MQTT_DEFAULT_PORT,
-                .transport = MQTT_TRANSPORT_OVER_SSL,
-            },
-            .verification = {
-                .crt_bundle_attach = esp_crt_bundle_attach,
+                .hostname = host,
+                .port = port,
+                .transport = transport,
             },
         },
         .credentials = {
@@ -225,6 +316,11 @@ esp_err_t esp_xiaozhi_mqtt_start(esp_xiaozhi_mqtt_handle_t handle)
             .keepalive = 90,
         },
     };
+    if (transport == MQTT_TRANSPORT_OVER_SSL) {
+        mqtt_cfg.broker.verification.crt_bundle_attach = esp_crt_bundle_attach;
+    }
+    ESP_LOGD(TAG, "MQTT endpoint: host=%s, port=%" PRIu32 ", transport=%s",
+             host, port, transport == MQTT_TRANSPORT_OVER_SSL ? "ssl" : "tcp");
 
     if (mqtt->mqtt_client) {
         ESP_LOGW(TAG, "MQTT client already started");

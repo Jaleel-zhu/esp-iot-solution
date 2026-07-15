@@ -31,6 +31,7 @@ typedef struct gatt_session gatt_session_t;
 
 // Legacy callback types (map to flux callbacks)
 // Terminal result of one send stream. stream_id identifies which transfer completed
+// or was dropped during session destroy.
 // (lets the caller order back-to-back sends). The library passes back the original source
 // buffer (data/size) so the caller can free the correct buffer. The library auto-clears
 // the send slot (frees its internal tracking arrays) but does NOT free data.
@@ -70,6 +71,7 @@ struct gatt_session {
     ble_transport_ctx_t transport_ctx;  // BLE transport context
     bool was_disconnected;              // Whether connection was ever disconnected (for detecting reconnect)
     bool destroying;                    // True once destroy starts; blocks new callbacks
+    bool destroy_scheduled;             // True once destroy event is queued to NimBLE host task
     uint16_t callback_inflight;         // Number of callbacks currently executing
 };
 
@@ -89,6 +91,8 @@ gatt_session_t *gatt_session_find_by_handle(uint16_t conn_handle);
 // API contract: gatt_session_destroy() must be called from the NimBLE host task context.
 // Avoid calling destroy from session callbacks to prevent reentrancy deadlocks.
 esp_err_t gatt_session_destroy(gatt_session_t *session);
+// Safe from any task context; posts session destroy to NimBLE host task queue.
+esp_err_t gatt_session_schedule_destroy(gatt_session_t *session);
 esp_err_t gatt_session_set_mtu(gatt_session_t *session, uint16_t mtu);
 
 // Fragment send API (delegates to flux_session)

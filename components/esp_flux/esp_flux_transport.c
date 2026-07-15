@@ -1992,6 +1992,13 @@ esp_err_t flux_session_destroy(flux_session_t *session)
     flux_session_t *cur = SLIST_FIRST(&g_flux_sessions_list);
     bool found = false;
     bool last_session = false;
+    typedef struct {
+        uint8_t stream_id;
+        const uint8_t *data;
+        uint32_t size;
+    } dropped_send_t;
+    dropped_send_t dropped_sends[FLUX_MAX_CONCURRENT_SENDS] = {0};
+    int dropped_send_count = 0;
 
     xSemaphoreTake(g_flux_sessions_mutex, portMAX_DELAY);
     flux_session_state_lock(session);
@@ -2028,9 +2035,18 @@ esp_err_t flux_session_destroy(flux_session_t *session)
         flux_recv_state_reset(&session->fragment_recv[i]);
     }
     // Clean up all send slots. NOTE: any in-progress transfer's source buffer is
-    // caller-owned (zero-copy); its completion callback will not fire on destroy,
-    // so the caller is responsible for freeing those buffers.
+    // caller-owned (zero-copy); report dropped transfers once the slot is no
+    // longer accessible so adapters can release their source buffers.
     for (int i = 0; i < FLUX_MAX_CONCURRENT_SENDS; i++) {
+        flux_fragment_send_state_t *send_state = &session->fragment_send[i];
+        if ((send_state->send_active || send_state->completed) &&
+                send_state->source_data &&
+                dropped_send_count < (int)(sizeof(dropped_sends) / sizeof(dropped_sends[0]))) {
+            dropped_sends[dropped_send_count].stream_id = send_state->stream_id;
+            dropped_sends[dropped_send_count].data = send_state->source_data;
+            dropped_sends[dropped_send_count].size = send_state->source_size;
+            dropped_send_count++;
+        }
         flux_send_state_clear(&session->fragment_send[i]);
     }
 
@@ -2054,6 +2070,15 @@ esp_err_t flux_session_destroy(flux_session_t *session)
 
     xSemaphoreGive(g_flux_sessions_mutex);
     flux_session_state_unlock(session);
+
+    for (int i = 0; i < dropped_send_count; i++) {
+        if (session->callbacks.session_complete_cb) {
+            session->callbacks.session_complete_cb(session, dropped_sends[i].stream_id,
+                                                   ESP_ERR_INVALID_STATE,
+                                                   dropped_sends[i].data,
+                                                   dropped_sends[i].size);
+        }
+    }
 
     while (true) {
         uint16_t callback_pending = 0;

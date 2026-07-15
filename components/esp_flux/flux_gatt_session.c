@@ -23,6 +23,8 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "os/os_mempool.h"
+#include "nimble/nimble_npl.h"
+#include "nimble/nimble_port.h"
 #include "flux_gatt_session.h"
 
 static const char *TAG = "gatt_session";
@@ -35,6 +37,20 @@ static struct ble_gap_event_listener g_gatt_session_gap_event_listener;
 static bool g_gap_listener_registered = false;
 static struct gatt_session_list g_sessions_list = SLIST_HEAD_INITIALIZER(g_sessions_list);
 static SemaphoreHandle_t g_gatt_sessions_mutex = NULL;
+typedef struct {
+    struct ble_npl_event ev;
+    gatt_session_t *session;
+} gatt_session_destroy_event_t;
+
+static void gatt_session_destroy_event_fn(struct ble_npl_event *ev)
+{
+    gatt_session_destroy_event_t *event = (gatt_session_destroy_event_t *)ev;
+    if (!event) {
+        return;
+    }
+    (void)gatt_session_destroy(event->session);
+    free(event);
+}
 
 static bool gatt_session_callback_pin_locked(gatt_session_t *session)
 {
@@ -672,6 +688,39 @@ esp_err_t gatt_session_destroy(gatt_session_t *session)
 
     free(session);
     ESP_LOGI(TAG, "Session destroyed");
+    return ESP_OK;
+}
+
+esp_err_t gatt_session_schedule_destroy(gatt_session_t *session)
+{
+    gatt_session_destroy_event_t *event = NULL;
+
+    if (!session) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!g_gatt_sessions_mutex) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    xSemaphoreTake(g_gatt_sessions_mutex, portMAX_DELAY);
+    if (session->destroying || session->destroy_scheduled) {
+        xSemaphoreGive(g_gatt_sessions_mutex);
+        return ESP_ERR_INVALID_STATE;
+    }
+    session->destroy_scheduled = true;
+    xSemaphoreGive(g_gatt_sessions_mutex);
+
+    event = calloc(1, sizeof(*event));
+    if (!event) {
+        xSemaphoreTake(g_gatt_sessions_mutex, portMAX_DELAY);
+        session->destroy_scheduled = false;
+        xSemaphoreGive(g_gatt_sessions_mutex);
+        return ESP_ERR_NO_MEM;
+    }
+
+    event->session = session;
+    ble_npl_event_init(&event->ev, gatt_session_destroy_event_fn, event);
+    ble_npl_eventq_put(nimble_port_get_dflt_eventq(), &event->ev);
     return ESP_OK;
 }
 

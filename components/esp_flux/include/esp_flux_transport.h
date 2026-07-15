@@ -9,6 +9,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "esp_err.h"
+#include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "sys/queue.h"
 
@@ -90,7 +91,7 @@ typedef struct {
 * @brief Application-level callbacks for session events
 */
 typedef struct {
-    /** Called when a send operation is complete (all fragments acknowledged) */
+    /** Called when a send operation completes, fails, or is dropped by destroy. */
     void (*session_complete_cb)(flux_session_t *session, uint8_t stream_id, esp_err_t status, const uint8_t *data, uint32_t size);
 
     /** Called when complete data has been received and reassembled.

@@ -1,0 +1,20 @@
+idf_component_register(
+    SRCS
+        "src/esp_gmp.c"
+        "src/esp_gmp_frame.c"
+        "src/esp_gmp_crc.c"
+        "src/esp_gmp_flux.c"
+        "ota/src/esp_gmp_ota_proto.c"
+        "ota/src/esp_gmp_sha256.c"
+        "ota/src/esp_gmp_ota.c"
+    INCLUDE_DIRS
+        "include"
+        "ota/include"
+    REQUIRES
+        esp_flux
+        freertos
+        esp_timer
+        app_update
+        mbedtls
+        esp_ringbuf
+)

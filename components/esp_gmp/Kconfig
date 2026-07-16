@@ -1,0 +1,54 @@
+menu "ESP-GMP"
+
+    config ESP_GMP_MAX_PAYLOAD
+        int "Maximum GMP payload bytes (product policy cap)"
+        range 64 65535
+        default 4096
+        help
+            Upper bound for GMP payload before transport limits are applied.
+            Runtime effective limit is min(this, registered transport max_payload).
+
+    config ESP_GMP_MAX_LINKS
+        int "Maximum registered links"
+        range 1 16
+        default 4
+
+    config ESP_GMP_TX_QUEUE_DEPTH
+        int "Queued outgoing GMP messages per link"
+        range 1 16
+        default 4
+
+    config ESP_GMP_FLUX_WINDOW_SIZE
+        int "Default Flux adapter window size for GMP sends (0 = Flux default 6)"
+        range 0 255
+        default 6
+
+    config ESP_GMP_FLUX_WINDOW_THRESHOLD
+        int "Default Flux adapter window threshold percent for GMP sends"
+        range 0 100
+        default 50
+
+    menu "ESP-GMP OTA"
+
+        config ESP_GMP_OTA_CHUNK_HINT
+            int "DATA chunk hint in start response (0 = auto from link MTU)"
+            range 0 65535
+            default 0
+
+        config ESP_GMP_OTA_RESTART_DELAY_MS
+            int "Delay before esp_restart() after successful OTA (ms)"
+            range 0 10000
+            default 500
+
+        config ESP_GMP_OTA_APPLY_TASK_STACK
+            int "OTA apply task stack size (bytes)"
+            default 4096
+
+        config ESP_GMP_OTA_APPLY_TASK_PRIO
+            int "OTA apply task priority"
+            range 1 25
+            default 5
+
+    endmenu
+
+endmenu

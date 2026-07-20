@@ -1761,7 +1761,7 @@ build_components_usb_esp_msc_ota_test_apps:
   extends:
     - .build_examples_template
     - .rules:build:components_usb_esp_msc_ota_test_apps
-    - .build_idf_active_release_version
+    - .build_idf_ge_than_v5_4_to_v6_2
   variables:
     EXAMPLE_DIR: components/usb/esp_msc_ota/test_apps
 

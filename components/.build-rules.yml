@@ -39,7 +39,7 @@ components/touch/touch_slider_sensor/test_apps:
 
 components/usb/esp_msc_ota/test_apps:
   enable:
-    - if: IDF_TARGET in ["esp32s3"]
+    - if: SOC_USB_OTG_SUPPORTED == 1
 
 components/usb/iot_usbh_rndis/test_apps:
   enable:

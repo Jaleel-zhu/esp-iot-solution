@@ -276,7 +276,7 @@ components/display/tools/esp_lvgl_adapter/benchmark:
 
 components/expander/io_expander/mcp23017/test_apps:
   enable:
-    - if: INCLUDE_DEFAULT == 1
+    - if: INCLUDE_DEFAULT == 1 and (IDF_VERSION_MAJOR >= 6 or (IDF_VERSION_MAJOR == 5 and IDF_VERSION_MINOR >= 2))
 
 components/keyboard_button/test_apps:
   enable:

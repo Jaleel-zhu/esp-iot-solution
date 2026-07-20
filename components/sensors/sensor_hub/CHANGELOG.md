@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.0 - 2026-07-20
+
+### Enhancements:
+
+- Support per-instance driver context, so multiple instances of the same driver can coexist
+- Support runtime driver registration via `iot_sensor_register_driver()` / `iot_sensor_unregister_driver()`, as a counterpart to the link-time `SENSOR_HUB_DETECT_FN` macro
+
 ## 0.1.5 - 2026-5-29
 
 - Added error check to the task acquisition and event post

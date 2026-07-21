@@ -1,5 +1,10 @@
 # ChangeLog
 
+## v1.3.2 - 2026-07-09
+
+* Added support for ESP32-S31
+* Fixed ELF execution from PSRAM on ESP32-S31 (enable IBUS1 instruction bus)
+
 ## v1.3.1 - 2026-02-10
 
 * Added support for overriding symbol resolution with `elf_set_symbol_resolver()`

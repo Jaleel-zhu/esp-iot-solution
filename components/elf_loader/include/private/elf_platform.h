@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2023-2026 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -64,12 +64,13 @@ uintptr_t elf_remap_text(esp_elf_t *elf, uintptr_t sym);
 /**
  * @brief Flush data from cache to external RAM.
  *
- * @param None
+ * @param addr  Start address of the memory region to flush
+ * @param size  Size of the memory region to flush
  *
  * @return None
  */
 #ifdef CONFIG_ELF_LOADER_LOAD_PSRAM
-void esp_elf_arch_flush(void);
+void esp_elf_arch_flush(uint32_t addr, uint32_t size);
 #endif
 
 /**

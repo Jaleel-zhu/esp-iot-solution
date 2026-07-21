@@ -244,6 +244,7 @@ typedef struct esp_elf {
 #else
     unsigned char   *psegment;          /*!< segment buffer pointer */
     uint32_t         svaddr;            /*!< start virtual address of segment */
+    uint32_t         seg_size;          /*!< total loaded segment size */
 #endif
 
     esp_elf_sec_t   sec[ELF_SECS];      /*!< ".bss", "data", "rodata", ".text" */

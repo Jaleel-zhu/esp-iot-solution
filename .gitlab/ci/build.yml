@@ -1959,7 +1959,7 @@ build_example_elf_loader_elf_loader_example:
   extends:
     - .build_examples_template
     - .rules:build:example_elf_loader_elf_loader_example
-    - .build_idf_active_release_version
+    - .build_idf_ge_than_v5_4_to_v6_2
   variables:
     EXAMPLE_DIR: examples/elf_loader/elf_loader_example
 
@@ -1967,7 +1967,7 @@ build_example_elf_loader_build_elf_file_example:
   extends:
     - .build_examples_template
     - .rules:build:example_elf_loader_build_elf_file_example
-    - .build_idf_active_release_version
+    - .build_idf_ge_than_v5_4_to_v6_2
   variables:
     EXAMPLE_DIR: examples/elf_loader/build_elf_file_example
 
@@ -1975,7 +1975,7 @@ build_example_elf_loader_elf_embed_example:
   extends:
     - .build_examples_template
     - .rules:build:example_elf_loader_elf_embed_example
-    - .build_idf_active_release_version
+    - .build_idf_ge_than_v5_4_to_v6_2
   variables:
     EXAMPLE_DIR: examples/elf_loader/elf_embed_example
 
@@ -1983,7 +1983,7 @@ build_example_elf_loader_elf_console_example:
   extends:
     - .build_examples_template
     - .rules:build:example_elf_loader_elf_console_example
-    - .build_idf_active_release_version
+    - .build_idf_ge_than_v5_4_to_v6_2
   variables:
     EXAMPLE_DIR: examples/elf_loader/elf_console_example
 

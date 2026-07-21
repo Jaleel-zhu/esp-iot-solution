@@ -10,12 +10,41 @@
 #include <unistd.h>
 #include <time.h>
 #include <reent.h>
+#include <errno.h>
 #include <pthread.h>
 #include <setjmp.h>
 #include <getopt.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <ctype.h>
+
+#if CONFIG_LIBC_PICOLIBC
+/*
+ * picolibc compatibility wrappers.
+ *
+ * In picolibc:
+ * - __errno is not a function (errno is a _Thread_local int variable).
+ * - __getreent() is a macro defined as NULL by ESP-IDF platform reent.h.
+ * - _ctype_ is a macro (_ctype_b + _CTYPE_OFFSET) in ctype.h; picolibc
+ *   exports the underlying _ctype_b[384] table. Newlib-built ELFs resolve
+ *   _ctype_ and index it as (_ctype_ + 1)[c]; _CTYPE_OFFSET is 127.
+ */
+static int *s_picolibc_errno_func(void)
+{
+    return &errno;
+}
+
+static struct _reent *s_picolibc_getreent_func(void)
+{
+    return NULL;
+}
+
+extern const char _ctype_b[];
+#ifndef _CTYPE_OFFSET
+#define _CTYPE_OFFSET 127
+#endif
+static const char * const s_picolibc_ctype_tbl = _ctype_b + _CTYPE_OFFSET;
+#endif /* CONFIG_LIBC_PICOLIBC */
 
 #include "rom/ets_sys.h"
 
@@ -92,13 +121,18 @@ static const struct esp_elfsym g_esp_libc_elfsyms[] = {
     ESP_ELFSYM_EXPORT(pthread_join),
     ESP_ELFSYM_EXPORT(pthread_exit),
 
-    /* newlib */
-
+    /* libc (newlib / picolibc) */
+#if CONFIG_LIBC_PICOLIBC
+    { "__errno", (void*)s_picolibc_errno_func },
+    { "__getreent", (void*)s_picolibc_getreent_func },
+    { "_ctype_", (void*)s_picolibc_ctype_tbl },
+#elif defined(__HAVE_LOCALE_INFO__) && __HAVE_LOCALE_INFO__
     ESP_ELFSYM_EXPORT(__errno),
     ESP_ELFSYM_EXPORT(__getreent),
-#ifdef __HAVE_LOCALE_INFO__
     ESP_ELFSYM_EXPORT(__locale_ctype_ptr),
 #else
+    ESP_ELFSYM_EXPORT(__errno),
+    ESP_ELFSYM_EXPORT(__getreent),
     ESP_ELFSYM_EXPORT(_ctype_),
 #endif
 

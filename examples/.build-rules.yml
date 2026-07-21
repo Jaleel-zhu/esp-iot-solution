@@ -535,6 +535,7 @@ examples/elf_loader/elf_loader_example:
     - if: IDF_TARGET in ["esp32p4"] and (IDF_VERSION_MAJOR >= 5 and IDF_VERSION_MINOR >= 3)
     - if: IDF_TARGET in ["esp32c6"] and (IDF_VERSION_MAJOR >= 5 and IDF_VERSION_MINOR >= 1)
     - if: IDF_TARGET in ["esp32c61"] and (IDF_VERSION_MAJOR >= 5 and IDF_VERSION_MINOR >= 5 and IDF_VERSION_PATCH >= 1)
+    - if: IDF_TARGET in ["esp32s31"] and ((IDF_VERSION_MAJOR > 6) or (IDF_VERSION_MAJOR == 6 and IDF_VERSION_MINOR >= 1))
 
 examples/elf_loader/build_elf_file_example:
   enable:
@@ -542,6 +543,7 @@ examples/elf_loader/build_elf_file_example:
     - if: IDF_TARGET in ["esp32p4"] and (IDF_VERSION_MAJOR >= 5 and IDF_VERSION_MINOR >= 3)
     - if: IDF_TARGET in ["esp32c6"] and (IDF_VERSION_MAJOR >= 5 and IDF_VERSION_MINOR >= 1)
     - if: IDF_TARGET in ["esp32c61"] and (IDF_VERSION_MAJOR >= 5 and IDF_VERSION_MINOR >= 5 and IDF_VERSION_PATCH >= 1)
+    - if: IDF_TARGET in ["esp32s31"] and ((IDF_VERSION_MAJOR > 6) or (IDF_VERSION_MAJOR == 6 and IDF_VERSION_MINOR >= 1))
 
 examples/elf_loader/elf_embed_example:
   enable:
@@ -549,6 +551,7 @@ examples/elf_loader/elf_embed_example:
     - if: IDF_TARGET in ["esp32p4"] and (IDF_VERSION_MAJOR >= 5 and IDF_VERSION_MINOR >= 3)
     - if: IDF_TARGET in ["esp32c6"] and (IDF_VERSION_MAJOR >= 5 and IDF_VERSION_MINOR >= 1)
     - if: IDF_TARGET in ["esp32c61"] and (IDF_VERSION_MAJOR >= 5 and IDF_VERSION_MINOR >= 5 and IDF_VERSION_PATCH >= 1)
+    - if: IDF_TARGET in ["esp32s31"] and ((IDF_VERSION_MAJOR > 6) or (IDF_VERSION_MAJOR == 6 and IDF_VERSION_MINOR >= 1))
 
 examples/elf_loader/elf_console_example:
   enable:
@@ -556,6 +559,7 @@ examples/elf_loader/elf_console_example:
     - if: IDF_TARGET in ["esp32p4"] and (IDF_VERSION_MAJOR >= 5 and IDF_VERSION_MINOR >= 3)
     - if: IDF_TARGET in ["esp32c6"] and (IDF_VERSION_MAJOR >= 5 and IDF_VERSION_MINOR >= 1)
     - if: IDF_TARGET in ["esp32c61"] and (IDF_VERSION_MAJOR >= 5 and IDF_VERSION_MINOR >= 5 and IDF_VERSION_PATCH >= 1)
+    - if: IDF_TARGET in ["esp32s31"] and ((IDF_VERSION_MAJOR > 6) or (IDF_VERSION_MAJOR == 6 and IDF_VERSION_MINOR >= 1))
 
 examples/relinker:
   enable:

@@ -89,7 +89,10 @@ esp_err_t esp_xiaozhi_chat_get_board_json(esp_xiaozhi_chat_board_info_t *board_i
     cJSON_AddNumberToObject(root, "version", 2);
     cJSON_AddStringToObject(root, "language", LANG_CODE);
     cJSON_AddNumberToObject(root, "flash_size", flash_size);
-    cJSON_AddNumberToObject(root, "minimum_free_heap_size", esp_get_minimum_free_heap_size());
+    char minimum_free_heap_size[32] = {0};
+    snprintf(minimum_free_heap_size, sizeof(minimum_free_heap_size), "%" PRIu32,
+             esp_get_minimum_free_heap_size());
+    cJSON_AddStringToObject(root, "minimum_free_heap_size", minimum_free_heap_size);
     cJSON_AddStringToObject(root, "mac_address", board_info->mac_address);
     cJSON_AddStringToObject(root, "uuid", board_info->uuid);
     cJSON_AddStringToObject(root, "chip_model_name", CONFIG_IDF_TARGET);

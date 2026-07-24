@@ -102,30 +102,51 @@ static esp_err_t static_file_handler(httpd_req_t *req)
     const char *uri = req->uri;
     char filepath[1024];
     char filepath_gz[1024];
-
-    snprintf(filepath, sizeof(filepath), "/webserver%s", req->uri);
-    snprintf(filepath_gz, sizeof(filepath_gz), "/webserver%s.gz", req->uri);
+    int ret;
 
     if (strcmp(uri, "/") == 0) {
-        snprintf(filepath, sizeof(filepath), "%s/index.html", STATIC_PATH);
-        snprintf(filepath_gz, sizeof(filepath_gz), "%s/index.html.gz", STATIC_PATH);
+        ret = snprintf(filepath, sizeof(filepath), "%s/index.html", STATIC_PATH);
+        if (ret < 0 || ret >= sizeof(filepath)) {
+            ESP_LOGE(TAG, "Static file path truncated for URI: %s", uri);
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "File path too long");
+            return ESP_FAIL;
+        }
+        ret = snprintf(filepath_gz, sizeof(filepath_gz), "%s/index.html.gz", STATIC_PATH);
+        if (ret < 0 || ret >= sizeof(filepath_gz)) {
+            ESP_LOGE(TAG, "Static gzip file path truncated for URI: %s", uri);
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "File path too long");
+            return ESP_FAIL;
+        }
     } else {
-        snprintf(filepath, sizeof(filepath), "%s%s", STATIC_PATH, uri);
-        snprintf(filepath_gz, sizeof(filepath_gz), "%s%s.gz", STATIC_PATH, uri);
+        ret = snprintf(filepath, sizeof(filepath), "%s%s", STATIC_PATH, uri);
+        if (ret < 0 || ret >= sizeof(filepath)) {
+            ESP_LOGE(TAG, "Static file path truncated for URI: %s", uri);
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "File path too long");
+            return ESP_FAIL;
+        }
+        ret = snprintf(filepath_gz, sizeof(filepath_gz), "%s%s.gz", STATIC_PATH, uri);
+        if (ret < 0 || ret >= sizeof(filepath_gz)) {
+            ESP_LOGE(TAG, "Static gzip file path truncated for URI: %s", uri);
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "File path too long");
+            return ESP_FAIL;
+        }
     }
 
-    FILE *file = fopen(filepath, "r");
-    FILE *file_gz = fopen(filepath_gz, "r");
+    FILE *file = fopen(filepath, "rb");
+    FILE *file_gz = fopen(filepath_gz, "rb");
 
     if (!file_gz && !file) {
-        ESP_LOGE(TAG, "File not found: %s", filepath);
+        ESP_LOGE(TAG, "Static file not found: %s", filepath);
         httpd_resp_send_404(req);
         return ESP_FAIL;
     }
 
     if (file_gz) {
+        // Prefer pre-compressed assets from SPIFFS when available.
         httpd_resp_set_hdr(req, "Content-Encoding", "gzip");
-        fclose(file);
+        if (file) {
+            fclose(file);
+        }
         file = file_gz;
     }
 
@@ -134,11 +155,19 @@ static esp_err_t static_file_handler(httpd_req_t *req)
     char buffer[1024];
     size_t read_bytes;
     while ((read_bytes = fread(buffer, 1, sizeof(buffer), file)) > 0) {
-        httpd_resp_send_chunk(req, buffer, read_bytes);
+        ret = httpd_resp_send_chunk(req, buffer, read_bytes);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to send static file chunk: %s", filepath);
+            fclose(file);
+            return ESP_FAIL;
+        }
     }
     fclose(file);
-    httpd_resp_send_chunk(req, NULL, 0);
-    return ESP_OK;
+    ret = httpd_resp_send_chunk(req, NULL, 0);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to finish static file response: %s", filepath);
+    }
+    return ret;
 }
 
 // API: GET /api/404

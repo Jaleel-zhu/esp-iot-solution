@@ -20,10 +20,43 @@ Features
 * Commissioning — Automatic short address assignment for Part 102 and Part 103 devices.
 * Send-twice — Built-in double transmission within 100 ms for configuration commands.
 
+Glossary
+--------
+
+.. glossary::
+
+   Te
+      The DALI half-period unit. Nominal value: 416.67 µs (±10 % tolerance
+      allowed by IEC 62386). All DALI timing is expressed as multiples of Te.
+
+   Forward Frame (FF)
+      A 16-bit frame transmitted by the DALI master to control gear. It
+      consists of 1 start bit + 16 data bits + 2 stop bits = 38 Te total.
+      The first byte encodes the address; the second byte carries the command
+      or arc-power value.
+
+   Backward Frame (BF)
+      An 8-bit reply frame sent by a DALI slave in response to a query
+      command. It consists of 1 start bit + 8 data bits + 2 stop bits =
+      22 Te total. The slave must respond within 7 Te-22 Te after the
+      forward frame ends.
+
+   Short Address
+      A unique address assigned to a single DALI control gear, in the range
+      0-63. Encoded in the forward frame as ``0AAAAAAS`` (A = address bits,
+      S = selector bit).
+      Short addresses for Part 102 and Part 103 devices are independent;
+      no address conflicts during commissioning.
+
+   Group Address
+      An address shared by up to 16 control gear units, in the range 0-15.
+      Encoded as ``100AAAAS``. Allows simultaneous control of multiple
+      fixtures without individual addressing.
+
 Supported Targets
 -----------------
 
-ESP32 series chips supported by the component metadata:
+DALI components support chips that include RMT peripherals; currently supported chips include:
 
 * ESP32
 * ESP32-S2
@@ -192,37 +225,56 @@ The example demonstrates:
 API Reference
 -------------
 
-.. include-build-file:: inc/dali.inc
+DALI APIs are divided into the following parts:
 
-Glossary
+* `Definitions <DALI Definitions_>`_
+
+  * `DALI Commands`_
+
+* `API <DALI API_>`_
+
+   * `DALI Part 101 — Physical Layer & RMT Driver Core`_
+   * `DALI Part 102 — Control Gear commissioning and addressing`_
+   * `DALI Part 103 — Input Device commissioning and general`_
+   * `DALI Part 209 — Color Control (DT8)`_
+   * `DALI Part 303 (Occupancy Sensor) & Part 304 (Light Sensor)`_
+
+DALI Definitions
+----------------
+
+This section contains common definitions, constants, and types used across DALI.
+
+DALI Commands
+~~~~~~~~~~~~~
+
+.. include-build-file:: inc/dali_command.inc
+
+DALI API
 --------
 
-.. glossary::
+The following sections are generated from the public headers under ``components/dali/include/``.
 
-   Te
-      The DALI half-period unit. Nominal value: 416.67 µs (±10 % tolerance
-      allowed by IEC 62386). All DALI timing is expressed as multiples of Te.
+DALI Part 101 — Physical Layer & RMT Driver Core
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-   Forward Frame (FF)
-      A 16-bit frame transmitted by the DALI master to control gear. It
-      consists of 1 start bit + 16 data bits + 2 stop bits = 38 Te total.
-      The first byte encodes the address; the second byte carries the command
-      or arc-power value.
+.. include-build-file:: inc/dali_system_components.inc
 
-   Backward Frame (BF)
-      An 8-bit reply frame sent by a DALI slave in response to a query
-      command. It consists of 1 start bit + 8 data bits + 2 stop bits =
-      22 Te total. The slave must respond within 7 Te-22 Te after the
-      forward frame ends.
+DALI Part 102 — Control Gear commissioning and addressing
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-   Short Address
-      A unique address assigned to a single DALI control gear, in the range
-      0-63. Encoded in the forward frame as ``0AAAAAAS`` (A = address bits,
-      S = selector bit).
-      Short addresses for Part 102 and Part 103 devices are independent;
-      no address conflicts during commissioning.
+.. include-build-file:: inc/dali_control_gear.inc
 
-   Group Address
-      An address shared by up to 16 control gear units, in the range 0-15.
-      Encoded as ``100AAAAS``. Allows simultaneous control of multiple
-      fixtures without individual addressing.
+DALI Part 103 — Input Device commissioning and general
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. include-build-file:: inc/dali_control_device.inc
+
+DALI Part 209 — Color Control (DT8)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. include-build-file:: inc/dali_color_control_dt8.inc
+
+DALI Part 303 (Occupancy Sensor) & Part 304 (Light Sensor)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. include-build-file:: inc/dali_device_sensors.inc

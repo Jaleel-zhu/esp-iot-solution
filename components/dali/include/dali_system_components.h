@@ -94,12 +94,12 @@ typedef struct {
  * @brief Transaction configuration for dali_master_do_transaction().
  */
 typedef struct {
-    dali_addr_type_t addr_type;
-    uint8_t          addr;
-    bool             is_cmd;
-    uint8_t          command;
-    bool             send_twice;
-    int              tx_timeout_ms;
+    dali_addr_type_t addr_type;     /*!< Address type */
+    uint8_t          addr;          /*!< Address */
+    bool             is_cmd;        /*!< Is command */
+    uint8_t          command;       /*!< Command */
+    bool             send_twice;    /*!< Send twice */
+    int              tx_timeout_ms; /*!< TX timeout (ms) */
 } dali_master_transaction_config_t;
 
 /* =========================================================================
@@ -108,12 +108,20 @@ typedef struct {
 
 /**
  * @brief Create and initialise a DALI master backed by RMT.
+ *
+ * @param[in] config Configuration for the DALI master.
+ * @param[in] rmt_config RMT configuration.
+ * @param[out] handle Handle to the DALI master instance.
+ * @return esp_err_t An error code indicating the success or failure of the operation.
  */
 esp_err_t dali_new_master_rmt(const dali_master_config_t *config, const dali_master_rmt_config_t *rmt_config,
                               dali_master_handle_t *handle);
 
 /**
  * @brief De-initialise and free a DALI master instance.
+ *
+ * @param[in] handle Handle to the DALI master instance.
+ * @return esp_err_t An error code indicating the success or failure of the operation.
  */
 esp_err_t dali_del_master(dali_master_handle_t handle);
 
@@ -124,6 +132,11 @@ esp_err_t dali_del_master(dali_master_handle_t handle);
 /**
  * @brief Execute a 2-byte DALI forward frame and optionally receive a
  *        backward frame.
+ *
+ * @param[in] handle Handle to the DALI master instance.
+ * @param[in] config Configuration for the transaction.
+ * @param[out] result Result of the transaction.
+ * @return esp_err_t An error code indicating the success or failure of the operation.
  */
 esp_err_t dali_master_do_transaction(dali_master_handle_t handle, const dali_master_transaction_config_t *config,
                                      int *result);
@@ -144,6 +157,7 @@ esp_err_t dali_master_do_transaction(dali_master_handle_t handle, const dali_mas
  * @param[in]  send_twice    If true, sends the frame twice within 100 ms.
  * @param[in]  tx_timeout_ms TX timeout per frame (ms).
  * @param[out] result        Received backward frame byte, or DALI_RESULT_NO_REPLY.
+ * @return esp_err_t An error code indicating the success or failure of the operation.
  */
 esp_err_t dali_master_do_raw_transaction(dali_master_handle_t handle, const uint8_t *tx_buf, size_t tx_len,
                                          bool send_twice, int tx_timeout_ms, int *result);

@@ -37,18 +37,35 @@ extern "C" {
  * @param[in]  instance      Occupancy instance number (typically 0).
  * @param[out] occupied      true if occupied, false if unoccupied/no reply.
  * @param[in]  tx_timeout_ms TX timeout (ms).
+ * @return esp_err_t An error code indicating the success or failure of the operation.
  */
 esp_err_t dali_303_query_occupancy(dali_master_handle_t handle, dali_addr_type_t addr_type, uint8_t addr,
                                    uint8_t instance, bool *occupied, int tx_timeout_ms);
 
 /**
  * @brief Query the hold timer on a Part 303 occupancy sensor instance.
+ *
+ * @param[in]  handle        Handle from dali_new_master_rmt().
+ * @param[in]  addr_type     Address type.
+ * @param[in]  addr          Device short address.
+ * @param[in]  instance      Occupancy instance number (typically 0).
+ * @param[out] hold_timer    Hold timer value.
+ * @param[in]  tx_timeout_ms TX timeout (ms).
+ * @return esp_err_t An error code indicating the success or failure of the operation.
  */
 esp_err_t dali_303_query_hold_timer(dali_master_handle_t handle, dali_addr_type_t addr_type, uint8_t addr,
                                     uint8_t instance, uint8_t *hold_timer, int tx_timeout_ms);
 
 /**
  * @brief Query the deadtime timer on a Part 303 occupancy sensor instance.
+ *
+ * @param[in]  handle        Handle from dali_new_master_rmt().
+ * @param[in]  addr_type     Address type.
+ * @param[in]  addr          Device short address.
+ * @param[in]  instance      Occupancy instance number (typically 0).
+ * @param[out] deadtime_timer Deadtime timer value.
+ * @param[in]  tx_timeout_ms TX timeout (ms).
+ * @return esp_err_t An error code indicating the success or failure of the operation.
  */
 esp_err_t dali_303_query_deadtime_timer(dali_master_handle_t handle, dali_addr_type_t addr_type, uint8_t addr,
                                         uint8_t instance, uint8_t *deadtime_timer, int tx_timeout_ms);
@@ -59,7 +76,13 @@ esp_err_t dali_303_query_deadtime_timer(dali_master_handle_t handle, dali_addr_t
  * Loads @p hold_time_s into Part 103 DTR0 via a special command, then
  * issues DALI_303_SET_HOLD_TIMER (send-twice) to the addressed instance.
  *
- * @param[in] hold_time_s  Raw DTR0 value (see IEC 62386-303 for encoding).
+ * @param[in] handle Handle from dali_new_master_rmt().
+ * @param[in] addr_type Address type.
+ * @param[in] addr          Device short address.
+ * @param[in] instance      Occupancy instance number (typically 0).
+ * @param[in] hold_time_s   Raw DTR0 value (see IEC 62386-303 for encoding).
+ * @param[in] tx_timeout_ms TX timeout (ms).
+ * @return esp_err_t An error code indicating the success or failure of the operation.
  */
 esp_err_t dali_303_set_hold_timer(dali_master_handle_t handle, dali_addr_type_t addr_type, uint8_t addr,
                                   uint8_t instance, uint8_t hold_time_s, int tx_timeout_ms);
@@ -70,18 +93,42 @@ esp_err_t dali_303_set_hold_timer(dali_master_handle_t handle, dali_addr_type_t 
 
 /**
  * @brief Query the hysteresis setting of a Part 304 light sensor instance.
+ *
+ * @param[in]  handle        Handle from dali_new_master_rmt().
+ * @param[in]  addr_type     Address type.
+ * @param[in]  addr          Device short address.
+ * @param[in]  instance      Light sensor instance number (typically 0).
+ * @param[out] hysteresis    Hysteresis value.
+ * @param[in]  tx_timeout_ms TX timeout (ms).
+ * @return esp_err_t An error code indicating the success or failure of the operation.
  */
 esp_err_t dali_304_query_hysteresis(dali_master_handle_t handle, dali_addr_type_t addr_type, uint8_t addr,
                                     uint8_t instance, uint8_t *hysteresis, int tx_timeout_ms);
 
 /**
  * @brief Query the report timer of a Part 304 light sensor instance.
+ *
+ * @param[in]  handle        Handle from dali_new_master_rmt().
+ * @param[in]  addr_type     Address type.
+ * @param[in]  addr          Device short address.
+ * @param[in]  instance      Light sensor instance number (typically 0).
+ * @param[out] report_timer  Report timer value.
+ * @param[in]  tx_timeout_ms TX timeout (ms).
+ * @return esp_err_t An error code indicating the success or failure of the operation.
  */
 esp_err_t dali_304_query_report_timer(dali_master_handle_t handle, dali_addr_type_t addr_type, uint8_t addr,
                                       uint8_t instance, uint8_t *report_timer, int tx_timeout_ms);
 
 /**
  * @brief Query the deadtime timer of a Part 304 light sensor instance.
+ *
+ * @param[in]  handle        Handle from dali_new_master_rmt().
+ * @param[in]  addr_type     Address type.
+ * @param[in]  addr          Device short address.
+ * @param[in]  instance      Light sensor instance number (typically 0).
+ * @param[out] deadtime_timer Deadtime timer value.
+ * @param[in]  tx_timeout_ms TX timeout (ms).
+ * @return esp_err_t An error code indicating the success or failure of the operation.
  */
 esp_err_t dali_304_query_deadtime_timer(dali_master_handle_t handle, dali_addr_type_t addr_type, uint8_t addr,
                                         uint8_t instance, uint8_t *deadtime_timer, int tx_timeout_ms);

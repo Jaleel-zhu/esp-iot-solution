@@ -18,10 +18,36 @@ DALI 组件提供了基于 ESP-IDF 的 DALI（IEC 62386）主站驱动。
 * Commissioning — 自动短地址分配，支持 Part 102 灯具和 Part 103 输入设备。
 * Send-twice 支持 — 内置 send-twice 机制，满足需要 100 ms 内双发的命令要求。
 
+术语表
+------
+
+.. glossary::
+
+   Te
+      DALI 半周期单位，标称值为 416.67 µs（IEC 62386 允许 ±10% 容差）。
+      所有 DALI 时序均以 Te 的整数倍表示。
+
+   前向帧(FF，Forward Frame)
+      由 DALI 主站发送给控制设备的 16 位帧，由 1 个起始位 + 16 个数据位 +
+      2 个停止位组成，共 38 Te。第一字节为地址字节，第二字节为命令或亮度值。
+
+   后向帧(BF，Backward Frame)
+      由 DALI 从设备响应查询命令时发送的 8 位回复帧，由 1 个起始位 + 8 个数据位 +
+      2 个停止位组成，共 22 Te。从设备须在前向帧结束后 7 Te～22 Te 内回复。
+
+   短地址(Short Address)
+      分配给单个 DALI 控制设备的唯一地址，范围 0–63。
+      在前向帧中编码为 ``0AAAAAAS`` （A 为地址位，S 为选择位）。
+      102和103设备的短地址是分别独立的，在commissioning分配的时候不会有地址冲突的问题。
+
+   组地址(Group Address)
+      最多 16 个控制设备共享的地址，范围 0–15。
+      编码为 ``100AAAAS`` ，可同时控制多个灯具而无需逐一寻址。
+
 支持目标
 --------
 
-组件元数据当前支持以下 ESP32 系列芯片：
+DALI 组件支持包含 RMT 外设的芯片，当前支持的芯片包括：
 
 * ESP32
 * ESP32-S2
@@ -184,30 +210,56 @@ DALI 驱动的全部配置均通过两个结构体在运行时完成，无需 Kc
 API 参考
 --------
 
-.. include-build-file:: inc/dali.inc
+DALI API 分为以下几个部分：
 
-术语表
-------
+* `Definitions <DALI Definitions_>`_
 
-.. glossary::
+  * `DALI Commands`_
 
-   Te
-      DALI 半周期单位，标称值为 416.67 µs（IEC 62386 允许 ±10% 容差）。
-      所有 DALI 时序均以 Te 的整数倍表示。
+* `API <DALI API_>`_
 
-   前向帧(FF，Forward Frame)
-      由 DALI 主站发送给控制设备的 16 位帧，由 1 个起始位 + 16 个数据位 +
-      2 个停止位组成，共 38 Te。第一字节为地址字节，第二字节为命令或亮度值。
+   * `DALI Part 101 — 物理层 & RMT 驱动核心`_
+   * `DALI Part 102（控制装置） — DAPC 调光、间接/配置命令及灯具查询`_
+   * `DALI Part 103（控制设备） — 事件上报及设备/实例级命令`_
+   * `DALI Part 209（DT8 调色） — 支持 RGB、CCT（Tc）、XY 色度控制`_
+   * `DALI Part 303/304（传感器） — 支持人体感应（303）和光照（304）传感器`_
 
-   后向帧(BF，Backward Frame)
-      由 DALI 从设备响应查询命令时发送的 8 位回复帧，由 1 个起始位 + 8 个数据位 +
-      2 个停止位组成，共 22 Te。从设备须在前向帧结束后 7 Te～22 Te 内回复。
+DALI Definitions
+----------------
 
-   短地址(Short Address)
-      分配给单个 DALI 控制设备的唯一地址，范围 0–63。
-      在前向帧中编码为 ``0AAAAAAS`` （A 为地址位，S 为选择位）。
-      102和103设备的短地址是分别独立的，在commissioning分配的时候不会有地址冲突的问题。
+本章节包含 DALI 中常用的定义、常量和类型。
 
-   组地址(Group Address)
-      最多 16 个控制设备共享的地址，范围 0–15。
-      编码为 ``100AAAAS`` ，可同时控制多个灯具而无需逐一寻址。
+DALI Commands
+~~~~~~~~~~~~~
+
+.. include-build-file:: inc/dali_command.inc
+
+DALI API
+--------
+
+以下章节由 ``components/dali/include/`` 下的公开头文件自动生成。
+
+DALI Part 101 — 物理层 & RMT 驱动核心
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. include-build-file:: inc/dali_system_components.inc
+
+DALI Part 102（控制装置） — DAPC 调光、间接/配置命令及灯具查询
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. include-build-file:: inc/dali_control_gear.inc
+
+DALI Part 103（控制设备） — 事件上报及设备/实例级命令
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. include-build-file:: inc/dali_control_device.inc
+
+DALI Part 209（DT8 调色） — 支持 RGB、CCT（Tc）、XY 色度控制
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. include-build-file:: inc/dali_color_control_dt8.inc
+
+DALI Part 303/304（传感器） — 支持人体感应（303）和光照（304）传感器
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. include-build-file:: inc/dali_device_sensors.inc

@@ -41,12 +41,12 @@ typedef enum {
 typedef union {
     struct {
         uint16_t mirek; /*!< CCT in Mirek (153 ≈ 6500 K … 370 ≈ 2700 K) */
-    } cct;
+    } cct;  /*!< CCT color mode */
     struct {
-        uint8_t r;
-        uint8_t g;
-        uint8_t b;
-    } rgb;
+        uint8_t r; /*!< Red channel (0–254, 0xFF = no change) */
+        uint8_t g; /*!< Green channel (0–254, 0xFF = no change) */
+        uint8_t b; /*!< Blue channel (0–254, 0xFF = no change) */
+    } rgb;  /*!< RGB color mode */
     struct {
         uint8_t r; /*!< Red channel (0–254, 0xFF = no change) */
         uint8_t g; /*!< Green channel (0–254, 0xFF = no change) */
@@ -70,6 +70,7 @@ typedef union {
  * @param[in] handle         Handle from dali_new_master_rmt().
  * @param[in] device_type    Device-type number (8 for DT8).
  * @param[in] tx_timeout_ms  TX timeout (ms).
+ * @return esp_err_t An error code indicating the success or failure of the operation.
  */
 esp_err_t dali_enable_device_type(dali_master_handle_t handle, uint8_t device_type, int tx_timeout_ms);
 
@@ -84,6 +85,7 @@ esp_err_t dali_enable_device_type(dali_master_handle_t handle, uint8_t device_ty
  * @param[in] mode          Color mode.
  * @param[in] val           Color value (mirek / r,g,b / r,g,b,w,a,f).
  * @param[in] tx_timeout_ms TX timeout per frame (ms).
+ * @return esp_err_t An error code indicating the success or failure of the operation.
  */
 esp_err_t dali_master_set_color(dali_master_handle_t handle, dali_addr_type_t addr_type, uint8_t addr,
                                 dali_color_mode_t mode, dali_color_val_t val, int tx_timeout_ms);

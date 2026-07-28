@@ -36,6 +36,14 @@ extern "C" {
 
 /**
  * @brief Send a Part 103 special command (3-byte frame: 0xC1, cmd, data).
+ *
+ * @param handle Handle from dali_new_master_rmt().
+ * @param special_cmd Special command to send.
+ * @param data Data to send.
+ * @param send_twice Whether to send twice.
+ * @param tx_timeout_ms Per-frame TX timeout (ms).
+ * @param result Result of the command (0 = success, 1 = failure).
+ * @return esp_err_t An error code indicating the success or failure of the operation.
  */
 esp_err_t dali_103_send_special(dali_master_handle_t handle, uint8_t special_cmd, uint8_t data, bool send_twice,
                                 int tx_timeout_ms, int *result);
@@ -43,8 +51,14 @@ esp_err_t dali_103_send_special(dali_master_handle_t handle, uint8_t special_cmd
 /**
  * @brief Send a Part 103 device-level command (3-byte frame).
  *
+ * @param handle Handle from dali_new_master_rmt().
  * @param addr_type  DALI_ADDR_SHORT or DALI_ADDR_BROADCAST.
  * @param addr       Short address (0–63) for DALI_ADDR_SHORT.
+ * @param command    Command to send.
+ * @param send_twice Whether to send twice.
+ * @param tx_timeout_ms Per-frame TX timeout (ms).
+ * @param result Result of the command (0 = success, 1 = failure).
+ * @return esp_err_t An error code indicating the success or failure of the operation.
  */
 esp_err_t dali_103_do_device_command(dali_master_handle_t handle, dali_addr_type_t addr_type, uint8_t addr,
                                      uint8_t command, bool send_twice, int tx_timeout_ms, int *result);
@@ -52,7 +66,15 @@ esp_err_t dali_103_do_device_command(dali_master_handle_t handle, dali_addr_type
 /**
  * @brief Send a Part 103 instance-level command (3-byte frame).
  *
+ * @param handle Handle from dali_new_master_rmt().
+ * @param addr_type DALI_ADDR_SHORT or DALI_ADDR_BROADCAST.
+ * @param addr Short address (0–63) for DALI_ADDR_SHORT.
  * @param instance  Instance number (0–31); encoded directly in byte 2.
+ * @param command    Command to send.
+ * @param send_twice Whether to send twice.
+ * @param tx_timeout_ms Per-frame TX timeout (ms).
+ * @param result Result of the command (0 = success, 1 = failure).
+ * @return esp_err_t An error code indicating the success or failure of the operation.
  */
 esp_err_t dali_103_do_instance_command(dali_master_handle_t handle, dali_addr_type_t addr_type, uint8_t addr,
                                        uint8_t instance, uint8_t command, bool send_twice, int tx_timeout_ms,
@@ -73,29 +95,58 @@ esp_err_t dali_103_do_instance_command(dali_master_handle_t handle, dali_addr_ty
  * @param[in]  max_devices   Maximum addresses to assign (1–64).
  * @param[out] count         Devices found and addressed (may be NULL).
  * @param[in]  tx_timeout_ms Per-frame TX timeout (ms).
+ * @return esp_err_t An error code indicating the success or failure of the operation.
  */
 esp_err_t dali_103_commission(dali_master_handle_t handle, dali_commission_mode_t mode, uint8_t start_addr,
                               uint8_t max_devices, uint8_t *count, int tx_timeout_ms);
 
 /**
  * @brief Query Part 103 input device status byte.
+ *
+ * @param handle Handle from dali_new_master_rmt().
+ * @param addr_type DALI_ADDR_SHORT or DALI_ADDR_BROADCAST.
+ * @param addr Short address (0–63) for DALI_ADDR_SHORT.
+ * @param status Status byte to read.
+ * @param tx_timeout_ms Per-frame TX timeout (ms).
+ * @return esp_err_t An error code indicating the success or failure of the operation.
  */
 esp_err_t dali_103_query_device_status(dali_master_handle_t handle, dali_addr_type_t addr_type, uint8_t addr,
                                        uint8_t *status, int tx_timeout_ms);
 
 /**
  * @brief Send a Part 103 RESET command (send-twice).
+ *
+ * @param handle Handle from dali_new_master_rmt().
+ * @param addr_type DALI_ADDR_SHORT or DALI_ADDR_BROADCAST.
+ * @param addr Short address (0–63) for DALI_ADDR_SHORT.
+ * @param tx_timeout_ms Per-frame TX timeout (ms).
+ * @return esp_err_t An error code indicating the success or failure of the operation.
  */
 esp_err_t dali_103_reset_device(dali_master_handle_t handle, dali_addr_type_t addr_type, uint8_t addr, int tx_timeout_ms);
 
 /**
  * @brief Query the type of a Part 103 instance.
+ *
+ * @param handle Handle from dali_new_master_rmt().
+ * @param addr_type DALI_ADDR_SHORT or DALI_ADDR_BROADCAST.
+ * @param addr Short address (0–63) for DALI_ADDR_SHORT.
+ * @param instance Instance number (0–31); encoded directly in byte 2.
+ * @param type Type of the instance.
+ * @param tx_timeout_ms Per-frame TX timeout (ms).
+ * @return esp_err_t An error code indicating the success or failure of the operation.
  */
 esp_err_t dali_103_query_instance_type(dali_master_handle_t handle, dali_addr_type_t addr_type, uint8_t addr,
                                        uint8_t instance, uint8_t *type, int tx_timeout_ms);
 
 /**
  * @brief Query the number of instances on a Part 103 input device.
+ *
+ * @param handle Handle from dali_new_master_rmt().
+ * @param addr_type DALI_ADDR_SHORT or DALI_ADDR_BROADCAST.
+ * @param addr Short address (0–63) for DALI_ADDR_SHORT.
+ * @param num_instances Number of instances.
+ * @param tx_timeout_ms Per-frame TX timeout (ms).
+ * @return esp_err_t An error code indicating the success or failure of the operation.
  */
 esp_err_t dali_103_query_number_of_instances(dali_master_handle_t handle, dali_addr_type_t addr_type, uint8_t addr,
                                              uint8_t *num_instances, int tx_timeout_ms);

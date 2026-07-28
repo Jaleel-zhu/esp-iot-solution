@@ -5,16 +5,7 @@
  */
 
 #include "esp_gmp_sha256.h"
-#include "psa/crypto.h"
 #include <string.h>
-
-_Static_assert(sizeof(psa_hash_operation_t) <= sizeof(((esp_gmp_sha256_ctx_t *)0)->opaque),
-               "esp_gmp_sha256_ctx_t too small");
-
-static psa_hash_operation_t *ctx_op(esp_gmp_sha256_ctx_t *ctx)
-{
-    return (psa_hash_operation_t *)ctx->opaque;
-}
 
 esp_err_t esp_gmp_sha256_begin(esp_gmp_sha256_ctx_t *ctx)
 {
@@ -22,9 +13,8 @@ esp_err_t esp_gmp_sha256_begin(esp_gmp_sha256_ctx_t *ctx)
         return ESP_ERR_INVALID_ARG;
     }
     memset(ctx, 0, sizeof(*ctx));
-    psa_hash_operation_t *op = ctx_op(ctx);
-    *op = psa_hash_operation_init();
-    if (psa_hash_setup(op, PSA_ALG_SHA_256) != PSA_SUCCESS) {
+    ctx->op = psa_hash_operation_init();
+    if (psa_hash_setup(&ctx->op, PSA_ALG_SHA_256) != PSA_SUCCESS) {
         return ESP_FAIL;
     }
     ctx->active = true;
@@ -42,7 +32,7 @@ esp_err_t esp_gmp_sha256_update(esp_gmp_sha256_ctx_t *ctx, const uint8_t *data, 
     if (!data) {
         return ESP_ERR_INVALID_ARG;
     }
-    if (psa_hash_update(ctx_op(ctx), data, len) != PSA_SUCCESS) {
+    if (psa_hash_update(&ctx->op, data, len) != PSA_SUCCESS) {
         esp_gmp_sha256_abort(ctx);
         return ESP_FAIL;
     }
@@ -55,7 +45,7 @@ esp_err_t esp_gmp_sha256_finish(esp_gmp_sha256_ctx_t *ctx, uint8_t out[32])
         return ESP_ERR_INVALID_ARG;
     }
     size_t hash_len = 0;
-    psa_status_t st = psa_hash_finish(ctx_op(ctx), out, 32, &hash_len);
+    psa_status_t st = psa_hash_finish(&ctx->op, out, 32, &hash_len);
     ctx->active = false;
     if (st != PSA_SUCCESS || hash_len != 32) {
         return ESP_FAIL;
@@ -68,7 +58,7 @@ void esp_gmp_sha256_abort(esp_gmp_sha256_ctx_t *ctx)
     if (!ctx || !ctx->active) {
         return;
     }
-    psa_hash_abort(ctx_op(ctx));
+    psa_hash_abort(&ctx->op);
     ctx->active = false;
 }
 

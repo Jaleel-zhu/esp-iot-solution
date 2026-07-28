@@ -1,5 +1,17 @@
 # ChangeLog
 
+## 1.4.1 - 2026-7-28
+
+### Enhancements:
+* FOC:
+    * Update ``espressif/arduino-foc`` dependency to v2.4.0 (SimpleFOC v2.4.0).
+    * Include ``HybridStepperMotor``, ``InlineCurrentSense`` and ``StepDirListener`` in the ``esp_simplefoc.h`` umbrella header.
+
+### Bug Fix:
+* FOC:
+    * Add missing ``StepperDriver2PWM``/``StepperDriver4PWM`` ``setPhaseState`` implementations.
+    * Fix ``_driverSyncLowSide`` return type to match the SimpleFOC hardware API (``void*``).
+
 ## 1.4.0 - 2026-7-6
 
 ### Enhancements:

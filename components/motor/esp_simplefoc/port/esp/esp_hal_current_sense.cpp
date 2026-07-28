@@ -343,19 +343,21 @@ float _readADCVoltageLowSide(const int pin, const void *cs_params)
 #endif
 }
 
-void _driverSyncLowSide(void *driver_params, void *cs_params)
+void *_driverSyncLowSide(void *driver_params, void *cs_params)
 {
 #if SOC_MCPWM_SUPPORTED
     if (driver_params == nullptr || cs_params == nullptr) {
-        return;
+        return SIMPLEFOC_CURRENT_SENSE_INIT_FAILED;
     }
 
     EspMcpwmDriverParams *mcpwm_driver_params = (EspMcpwmDriverParams *)driver_params;
     mcpwm_driver_params->lowside_cs_params = cs_params;
     s_active_lowside_params = (EspLowsideCurrentSenseParams *)cs_params;
+    return cs_params;
 #else
     _UNUSED(driver_params);
     _UNUSED(cs_params);
+    return SIMPLEFOC_CURRENT_SENSE_INIT_FAILED;
 #endif
 }
 

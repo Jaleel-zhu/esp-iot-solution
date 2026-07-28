@@ -2,6 +2,8 @@
 
 This example demonstrates a minimal MIDI over BLE GATT server using the BLE-MIDI profile.
 
+**Related example:** [`ble_midi_central`](../ble_midi_central/README.md) (BLE Central: scan, connect, subscribe, print received MIDI—use it on a second board to verify this peripheral).
+
 It:
 - Initializes BLE connection manager
 - Adds the BLE-MIDI service and IO characteristic

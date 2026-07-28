@@ -33,18 +33,36 @@ idf.py add-dependency "espressif/ble_midi=*"
 
 ### 示例
 
-使用以下命令从示例模板创建工程：
+在 **esp-iot-solution** 中，两个示例位于 `examples/bluetooth/ble_profiles/ble_midi/`：
+
+| 目录 | BLE 角色 | 说明 |
+|------|----------|------|
+| `ble_midi_peripheral` | Peripheral（GATT 服务端） | 广播 BLE‑MIDI，经 Notification 发送 MIDI（对主机而言为 MIDI Out）。 |
+| `ble_midi_central` | Central（GATT 客户端） | 扫描、连接、开 Notify，打印收到的 BEP/MIDI（对主机而言为 MIDI In）；可与 `ble_midi_peripheral` 对测。 |
+
+使用 Component Registry 从示例模板创建工程（示例名与目录名一致）：
 
 ```bash
-idf.py create-project-from-example "espressif/ble_profiles=*:ble_midi"
+idf.py create-project-from-example "espressif/ble_midi=*:ble_midi_peripheral"
+idf.py create-project-from-example "espressif/ble_midi=*:ble_midi_central"
 ```
 
-也可直接参考本仓库示例：`examples/bluetooth/ble_profiles/ble_midi`。  
-示例演示了：
+本仓库源码路径：
+
+- `examples/bluetooth/ble_profiles/ble_midi/ble_midi_peripheral`
+- `examples/bluetooth/ble_profiles/ble_midi/ble_midi_central`
+
+**`ble_midi_peripheral`** 演示：
+
 - BLE‑MIDI GATT Service 的注册与发布（包含 128‑bit MIDI Service UUID 的扩展广播）
 - 通过 Notify 收发 BLE‑MIDI 事件包
 - 使用 `esp_ble_midi_send_multi()` 聚合多条 MIDI 消息
 - 调用 `esp_ble_midi_svc_deinit()` 优雅卸载 Service
+
+**`ble_midi_central`** 演示：
+
+- 按 BLE‑MIDI 服务 UUID（及可选设备名）扫描、连接、GATT 发现、写 CCCD 订阅通知
+- 将通知数据送入 `esp_ble_midi_on_bep_received()` / `esp_ble_midi_register_*_cb()`（**不要**在事件回调里对 notify 缓冲区 `free()`，见该示例 README）
 
 ### 常见问题
 

@@ -2,7 +2,7 @@ version: 0.3.0
 dependencies:
   idf: '>=5.2'
   espressif/tinyusb:
-    version: '>=0.15.0~2'
+    version: '0.19.0~3'
   espressif/adc_battery_estimation:
     version: =*
     override_path: ../../../components/sensors/battery_fuel_gauge/adc_battery_estimation

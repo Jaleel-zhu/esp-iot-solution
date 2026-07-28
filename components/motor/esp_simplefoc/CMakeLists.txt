@@ -45,5 +45,8 @@ set_source_files_properties(
 )
 
 idf_component_get_property(arduino-foc_lib espressif__arduino-foc COMPONENT_LIB)
+if("${IDF_VERSION_MAJOR}.${IDF_VERSION_MINOR}" VERSION_GREATER_EQUAL "6.0")
+    target_compile_options(${arduino-foc_lib} PRIVATE "-Wno-narrowing")
+endif()
 cmake_policy(SET CMP0079 NEW)
 target_link_libraries(${arduino-foc_lib} PUBLIC ${COMPONENT_LIB})

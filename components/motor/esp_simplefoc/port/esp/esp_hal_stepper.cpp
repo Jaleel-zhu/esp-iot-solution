@@ -251,6 +251,15 @@ void StepperDriver2PWM::setPwm(float Ua, float Ub)
     _writeDutyCycle2PWM(duty_cycle1, duty_cycle2, params);
 }
 
+void StepperDriver2PWM::setPhaseState(PhaseState sa, PhaseState sb)
+{
+    // disable if needed
+    if (_isset(enable_pin1) && _isset(enable_pin2)) {
+        digitalWrite(enable_pin1, sa == PhaseState::PHASE_ON ? enable_active_high : !enable_active_high);
+        digitalWrite(enable_pin2, sb == PhaseState::PHASE_ON ? enable_active_high : !enable_active_high);
+    }
+}
+
 StepperDriver4PWM::StepperDriver4PWM(int ph1A, int ph1B, int ph2A, int ph2B, int en1, int en2)
 {
     pwm1A = ph1A;
@@ -331,4 +340,13 @@ void StepperDriver4PWM::setPwm(float Ualpha, float Ubeta)
     }
 
     _writeDutyCycle4PWM(duty_cycle1A, duty_cycle1B, duty_cycle2A, duty_cycle2B, params);
+}
+
+void StepperDriver4PWM::setPhaseState(PhaseState sa, PhaseState sb)
+{
+    // disable if needed
+    if (_isset(enable_pin1) && _isset(enable_pin2)) {
+        digitalWrite(enable_pin1, sa == PhaseState::PHASE_ON ? enable_active_high : !enable_active_high);
+        digitalWrite(enable_pin2, sb == PhaseState::PHASE_ON ? enable_active_high : !enable_active_high);
+    }
 }

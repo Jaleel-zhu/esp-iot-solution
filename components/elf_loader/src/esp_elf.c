@@ -413,7 +413,6 @@ static int esp_elf_load_segment(esp_elf_t *elf, const uint8_t *pbuf)
     }
 
     elf->svaddr = vaddr_s;
-    elf->seg_size = size;
     elf->psegment = esp_elf_malloc(size, true);
     if (!elf->psegment) {
         return -ENOMEM;
@@ -679,11 +678,7 @@ int esp_elf_relocate(esp_elf_t *elf, const uint8_t *pbuf)
     }
 
 #ifdef CONFIG_ELF_LOADER_LOAD_PSRAM
-#if CONFIG_ELF_LOADER_BUS_ADDRESS_MIRROR
-    esp_elf_arch_flush((uint32_t)elf->ptext, elf->sec[ELF_SEC_TEXT].size);
-#else
-    esp_elf_arch_flush((uint32_t)elf->psegment, elf->seg_size);
-#endif
+    esp_elf_arch_flush();
 #endif
 
     return 0;

@@ -1,5 +1,9 @@
 # ChangeLog
 
+## v1.3.3 - 2026-07-28
+
+* Fixed intermittent crash during long-term ELF execution from PSRAM on ESP32-S31 (use full cache flush instead of ranged API)
+
 ## v1.3.2 - 2026-07-09
 
 * Added support for ESP32-S31

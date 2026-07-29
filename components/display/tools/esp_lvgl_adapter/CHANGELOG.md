@@ -1,5 +1,12 @@
 # ChangeLog
 
+## v0.6.3 (2026-07-17)
+
+* Optimize LVGL v8/v9 partial framebuffer repair for double/triple-buffer tear-avoid modes:
+  - Track per-framebuffer pending dirty regions and repair only `pending[target] - current_dirty`
+  - Support rotated partial refresh by converting LVGL dirty areas to physical framebuffer coordinates
+  - Keep baseline repair fallback for reset, stale history, framebuffer-index mismatch, or repair-region overflow
+
 ## v0.6.2 (2026-07-03)
 
 * Add `esp_lv_adapter_display_notify_frame_buf_complete_from_isr()` to forward an LCD frame-buffer-complete event into the adapter's buffer-switch/pipeline release path from an ISR. This closes a gap in the external-callback-driven flow: when an external owner holds the ESP-IDF panel callbacks (after `esp_lv_adapter_set_default_display_idf_callback_registration_enabled(false)`), the existing `notify_color_trans_done_from_isr`/`notify_frame_done_from_isr` forwarders never release pipeline buffers, so buffer-switch tear-avoid modes and dummy-draw could block forever in the flush path waiting for a free buffer.

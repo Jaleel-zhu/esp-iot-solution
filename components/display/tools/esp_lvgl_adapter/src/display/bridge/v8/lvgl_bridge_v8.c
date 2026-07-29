@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <inttypes.h>
 #include <string.h>
 #include <sys/queue.h>
 #include "sdkconfig.h"
@@ -90,6 +91,10 @@
 /* Hardware alignment */
 #define PPA_DEFAULT_ALIGNMENT      (128)   /* Default PPA alignment in bytes */
 
+#define DISPLAY_BRIDGE_V8_DIFF_BUFFER_COUNT  (3U)
+#define DISPLAY_BRIDGE_V8_DIFF_RECT_CAPACITY (LV_INV_BUF_SIZE)
+#define DISPLAY_BRIDGE_V8_REPAIR_CAPACITY    (LV_INV_BUF_SIZE * 4U + 4U)
+
 /*********************
  *      TYPEDEFS
  *********************/
@@ -98,6 +103,19 @@
 /* Empty implementation for LVGL v9+ */
 
 #else
+
+typedef struct {
+    uint32_t revision;
+    uint16_t pending_count;
+    bool valid;
+    /* Regions where this framebuffer is behind the latest submitted frame. */
+    lv_area_t pending[DISPLAY_BRIDGE_V8_DIFF_RECT_CAPACITY];
+} display_bridge_v8_diff_buffer_t;
+
+typedef struct {
+    display_bridge_v8_diff_buffer_t buffers[DISPLAY_BRIDGE_V8_DIFF_BUFFER_COUNT];
+    uint32_t revision;
+} display_bridge_v8_diff_tracker_t;
 
 typedef struct esp_lv_adapter_display_bridge_v8 {
     esp_lv_adapter_display_bridge_t base;
@@ -128,6 +146,7 @@ typedef struct esp_lv_adapter_display_bridge_v8 {
 
     /* --- Pipeline buffer management (owned by bridge, inited by display_bridge_pipeline_init_from_cfg) --- */
     esp_lv_adapter_display_pipeline_t pipeline;
+    display_bridge_v8_diff_tracker_t diff_tracker;
 } esp_lv_adapter_display_bridge_v8_t;
 
 /* display_pipeline_buf is defined in adapter_internal.h */
@@ -178,6 +197,309 @@ static inline esp_lv_adapter_rotation_t bridge_rotation(const esp_lv_adapter_dis
 static inline uint8_t bridge_color_bytes(const esp_lv_adapter_display_bridge_v8_t *impl)
 {
     return impl->runtime.color_bytes;
+}
+
+static uint8_t display_bridge_v8_diff_buffer_index(const esp_lv_adapter_display_bridge_v8_t *impl,
+                                                   const void *buffer)
+{
+    uint8_t count = LV_MIN(impl->runtime.frame_buffer_count,
+                           (uint8_t)DISPLAY_BRIDGE_V8_DIFF_BUFFER_COUNT);
+    for (uint8_t index = 0; index < count; ++index) {
+        if (impl->runtime.frame_buffers[index] == buffer) {
+            return index;
+        }
+    }
+    return UINT8_MAX;
+}
+
+static void display_bridge_v8_diff_reset_to(esp_lv_adapter_display_bridge_v8_t *impl,
+                                            uint8_t current_index)
+{
+    memset(&impl->diff_tracker, 0, sizeof(impl->diff_tracker));
+    if (current_index < DISPLAY_BRIDGE_V8_DIFF_BUFFER_COUNT) {
+        impl->diff_tracker.buffers[current_index].valid = true;
+    }
+}
+
+static void display_bridge_v8_diff_reset(esp_lv_adapter_display_bridge_v8_t *impl)
+{
+    display_bridge_v8_diff_reset_to(
+        impl, display_bridge_v8_diff_buffer_index(impl, impl->disp_fb));
+}
+
+static bool display_bridge_v8_diff_rect_valid(const lv_area_t *rect)
+{
+    return rect->x2 >= rect->x1 && rect->y2 >= rect->y1;
+}
+
+static bool display_bridge_v8_diff_rects_touch_or_overlap(const lv_area_t *a,
+                                                          const lv_area_t *b)
+{
+    bool x_overlap = a->x1 <= b->x2 && a->x2 >= b->x1;
+    bool y_overlap = a->y1 <= b->y2 && a->y2 >= b->y1;
+    bool x_adjacent = a->x2 + 1 == b->x1 || b->x2 + 1 == a->x1;
+    bool y_adjacent = a->y2 + 1 == b->y1 || b->y2 + 1 == a->y1;
+    return (x_overlap && y_overlap) || (x_adjacent && y_overlap) ||
+           (y_adjacent && x_overlap);
+}
+
+static bool display_bridge_v8_diff_merge_one(lv_area_t *rects,
+                                             uint16_t *count,
+                                             uint16_t capacity,
+                                             lv_area_t rect)
+{
+    uint16_t index = 0;
+    while (index < *count) {
+        if (!display_bridge_v8_diff_rects_touch_or_overlap(&rects[index], &rect)) {
+            ++index;
+            continue;
+        }
+        rect.x1 = LV_MIN(rect.x1, rects[index].x1);
+        rect.y1 = LV_MIN(rect.y1, rects[index].y1);
+        rect.x2 = LV_MAX(rect.x2, rects[index].x2);
+        rect.y2 = LV_MAX(rect.y2, rects[index].y2);
+        rects[index] = rects[--(*count)];
+        index = 0;
+    }
+    if (*count >= capacity) {
+        return false;
+    }
+    rects[(*count)++] = rect;
+    return true;
+}
+
+static void display_bridge_v8_diff_area_to_physical(
+    const esp_lv_adapter_display_bridge_v8_t *impl,
+    const lv_area_t *logical,
+    lv_area_t *physical)
+{
+    const esp_lv_adapter_rotation_t rotation = bridge_rotation(impl);
+    if (rotation == ESP_LV_ADAPTER_ROTATE_0) {
+        *physical = *logical;
+        return;
+    }
+
+    int x1 = 0;
+    int y1 = 0;
+    int x2 = 0;
+    int y2 = 0;
+    display_coord_to_phy(logical->x1, logical->y1, &x1, &y1,
+                         rotation, bridge_h_res(impl), bridge_v_res(impl));
+    display_coord_to_phy(logical->x2, logical->y2, &x2, &y2,
+                         rotation, bridge_h_res(impl), bridge_v_res(impl));
+
+    physical->x1 = LV_MIN(x1, x2);
+    physical->y1 = LV_MIN(y1, y2);
+    physical->x2 = LV_MAX(x1, x2);
+    physical->y2 = LV_MAX(y1, y2);
+}
+
+static bool display_bridge_v8_diff_capture_current(
+    const esp_lv_adapter_display_bridge_v8_t *impl,
+    const lv_disp_t *disp,
+    lv_area_t *current,
+    uint16_t *current_count,
+    bool to_physical)
+{
+    *current_count = 0;
+    const esp_lv_adapter_rotation_t rotation = bridge_rotation(impl);
+    const bool rotated = to_physical && rotation != ESP_LV_ADAPTER_ROTATE_0;
+    const bool swapped = rotation == ESP_LV_ADAPTER_ROTATE_90 ||
+                         rotation == ESP_LV_ADAPTER_ROTATE_270;
+    const int32_t logical_w = rotated && swapped ?
+                              bridge_v_res(impl) : bridge_h_res(impl);
+    const int32_t logical_h = rotated && swapped ?
+                              bridge_h_res(impl) : bridge_v_res(impl);
+    uint16_t count = LV_MIN(disp->inv_p, (uint16_t)LV_INV_BUF_SIZE);
+    for (uint16_t index = 0; index < count; ++index) {
+        if (disp->inv_area_joined[index]) {
+            continue;
+        }
+        lv_area_t rect = disp->inv_areas[index];
+        rect.x1 = LV_MAX(rect.x1, 0);
+        rect.y1 = LV_MAX(rect.y1, 0);
+        rect.x2 = LV_MIN(rect.x2, logical_w - 1);
+        rect.y2 = LV_MIN(rect.y2, logical_h - 1);
+        if (rotated) {
+            display_bridge_v8_diff_area_to_physical(impl, &rect, &rect);
+            rect.x1 = LV_MAX(rect.x1, 0);
+            rect.y1 = LV_MAX(rect.y1, 0);
+            rect.x2 = LV_MIN(rect.x2, (int32_t)bridge_h_res(impl) - 1);
+            rect.y2 = LV_MIN(rect.y2, (int32_t)bridge_v_res(impl) - 1);
+        }
+        if (!display_bridge_v8_diff_rect_valid(&rect)) {
+            continue;
+        }
+        if (*current_count >= DISPLAY_BRIDGE_V8_DIFF_RECT_CAPACITY) {
+            *current_count = 0;
+            return false;
+        }
+        current[(*current_count)++] = rect;
+    }
+    return *current_count != 0;
+}
+
+static bool display_bridge_v8_diff_append(lv_area_t *rects,
+                                          uint16_t *count,
+                                          uint16_t capacity,
+                                          lv_area_t rect)
+{
+    if (!display_bridge_v8_diff_rect_valid(&rect)) {
+        return true;
+    }
+    if (*count >= capacity) {
+        return false;
+    }
+    rects[(*count)++] = rect;
+    return true;
+}
+
+static bool display_bridge_v8_diff_subtract_one(lv_area_t source,
+                                                lv_area_t cut,
+                                                lv_area_t *out,
+                                                uint16_t *out_count,
+                                                uint16_t capacity)
+{
+    lv_area_t overlap = {
+        .x1 = LV_MAX(source.x1, cut.x1),
+        .y1 = LV_MAX(source.y1, cut.y1),
+        .x2 = LV_MIN(source.x2, cut.x2),
+        .y2 = LV_MIN(source.y2, cut.y2),
+    };
+    if (!display_bridge_v8_diff_rect_valid(&overlap)) {
+        return display_bridge_v8_diff_append(out, out_count, capacity, source);
+    }
+
+    return display_bridge_v8_diff_append(out, out_count, capacity, (lv_area_t) {
+        source.x1, source.y1, source.x2, overlap.y1 - 1
+    }) &&
+    display_bridge_v8_diff_append(out, out_count, capacity, (lv_area_t) {
+        source.x1, overlap.y2 + 1, source.x2, source.y2
+    }) &&
+    display_bridge_v8_diff_append(out, out_count, capacity, (lv_area_t) {
+        source.x1, overlap.y1, overlap.x1 - 1, overlap.y2
+    }) &&
+    display_bridge_v8_diff_append(out, out_count, capacity, (lv_area_t) {
+        overlap.x2 + 1, overlap.y1, source.x2, overlap.y2
+    });
+}
+
+static void display_bridge_v8_diff_coalesce_exact(lv_area_t *rects,
+                                                  uint16_t *count)
+{
+    bool merged;
+    do {
+        merged = false;
+        for (uint16_t first = 0; first < *count && !merged; ++first) {
+            for (uint16_t second = first + 1; second < *count; ++second) {
+                lv_area_t *a = &rects[first];
+                const lv_area_t *b = &rects[second];
+                bool same_x_span = a->x1 == b->x1 && a->x2 == b->x2;
+                bool same_y_span = a->y1 == b->y1 && a->y2 == b->y2;
+                bool y_connected = a->y1 <= b->y2 + 1 && b->y1 <= a->y2 + 1;
+                bool x_connected = a->x1 <= b->x2 + 1 && b->x1 <= a->x2 + 1;
+                bool a_contains_b = a->x1 <= b->x1 && a->y1 <= b->y1 &&
+                                    a->x2 >= b->x2 && a->y2 >= b->y2;
+                bool b_contains_a = b->x1 <= a->x1 && b->y1 <= a->y1 &&
+                                    b->x2 >= a->x2 && b->y2 >= a->y2;
+
+                if ((!same_x_span || !y_connected) &&
+                        (!same_y_span || !x_connected) &&
+                        !a_contains_b && !b_contains_a) {
+                    continue;
+                }
+                a->x1 = LV_MIN(a->x1, b->x1);
+                a->y1 = LV_MIN(a->y1, b->y1);
+                a->x2 = LV_MAX(a->x2, b->x2);
+                a->y2 = LV_MAX(a->y2, b->y2);
+                rects[second] = rects[--(*count)];
+                merged = true;
+                break;
+            }
+        }
+    } while (merged);
+}
+
+static bool display_bridge_v8_diff_subtract(
+    const lv_area_t *pending,
+    uint16_t pending_count,
+    const lv_area_t *current,
+    uint16_t current_count,
+    lv_area_t *repair,
+    uint16_t *repair_count)
+{
+    if (pending_count > DISPLAY_BRIDGE_V8_REPAIR_CAPACITY) {
+        return false;
+    }
+    if (pending_count != 0) {
+        memcpy(repair, pending, pending_count * sizeof(*repair));
+    }
+    *repair_count = pending_count;
+    for (uint16_t cut = 0; cut < current_count; ++cut) {
+        uint16_t index = 0;
+        while (index < *repair_count) {
+            lv_area_t source = repair[index];
+            lv_area_t overlap = {
+                .x1 = LV_MAX(source.x1, current[cut].x1),
+                .y1 = LV_MAX(source.y1, current[cut].y1),
+                .x2 = LV_MIN(source.x2, current[cut].x2),
+                .y2 = LV_MIN(source.y2, current[cut].y2),
+            };
+            if (!display_bridge_v8_diff_rect_valid(&overlap)) {
+                ++index;
+                continue;
+            }
+
+            repair[index] = repair[--(*repair_count)];
+            if (!display_bridge_v8_diff_subtract_one(
+                        source, current[cut], repair, repair_count,
+                        DISPLAY_BRIDGE_V8_REPAIR_CAPACITY)) {
+                *repair_count = 0;
+                return false;
+            }
+        }
+    }
+    display_bridge_v8_diff_coalesce_exact(repair, repair_count);
+    return true;
+}
+
+static void display_bridge_v8_diff_commit(
+    esp_lv_adapter_display_bridge_v8_t *impl,
+    uint8_t target_index,
+    const lv_area_t *current,
+    uint16_t current_count)
+{
+    if (impl->diff_tracker.revision == UINT32_MAX) {
+        memset(&impl->diff_tracker, 0, sizeof(impl->diff_tracker));
+    }
+    uint32_t revision = ++impl->diff_tracker.revision;
+    uint8_t count = LV_MIN(impl->runtime.frame_buffer_count,
+                           (uint8_t)DISPLAY_BRIDGE_V8_DIFF_BUFFER_COUNT);
+    for (uint8_t index = 0; index < count; ++index) {
+        display_bridge_v8_diff_buffer_t *state =
+            &impl->diff_tracker.buffers[index];
+        if (index == target_index || !state->valid) {
+            continue;
+        }
+        uint16_t pending_count = state->pending_count;
+        for (uint16_t rect = 0; rect < current_count; ++rect) {
+            if (!display_bridge_v8_diff_merge_one(
+                        state->pending, &pending_count,
+                        DISPLAY_BRIDGE_V8_DIFF_RECT_CAPACITY, current[rect])) {
+                state->valid = false;
+                state->pending_count = 0;
+                break;
+            }
+        }
+        if (state->valid) {
+            state->pending_count = pending_count;
+        }
+    }
+    impl->diff_tracker.buffers[target_index] =
+    (display_bridge_v8_diff_buffer_t) {
+        .revision = revision,
+        .valid = true,
+    };
 }
 
 #if CONFIG_SOC_PPA_SUPPORTED
@@ -714,6 +1036,20 @@ static void rotate_copy_region(esp_lv_adapter_display_bridge_v8_t *impl,
 static void copy_unrendered_area_from_front_to_back(lv_disp_t *disp_refr,
                                                     esp_lv_adapter_display_bridge_v8_t *impl);
 
+static void copy_diff_repair_from_front_to_back(
+    esp_lv_adapter_display_bridge_v8_t *impl,
+    const lv_area_t *repair,
+    uint16_t repair_count);
+
+static bool display_bridge_v8_prepare_partial_back_buffer(
+    esp_lv_adapter_display_bridge_v8_t *impl,
+    lv_disp_t *disp_refr,
+    bool dirty_to_physical,
+    lv_area_t *current,
+    uint16_t *current_count,
+    uint8_t *target_index,
+    bool *reset_tracker);
+
 static void flush_dirty_save(esp_lv_adapter_display_dirty_region_t *dirty_area);
 
 static void flush_dirty_copy(esp_lv_adapter_display_bridge_v8_t *impl,
@@ -840,6 +1176,7 @@ esp_lv_adapter_display_bridge_t *esp_lv_adapter_display_bridge_v8_create(const e
     }
 
     display_dirty_region_reset(&impl->dirty);
+    display_bridge_v8_diff_reset(impl);
     display_bridge_v8_prime_double_buffers(impl);
 
     if (impl->cfg.base.profile.interface == ESP_LV_ADAPTER_PANEL_IF_OTHER &&
@@ -959,6 +1296,7 @@ static esp_err_t display_bridge_v8_update_panel(esp_lv_adapter_display_bridge_t 
 
     /* Reset dirty region tracking */
     display_dirty_region_reset(&impl->dirty);
+    display_bridge_v8_diff_reset(impl);
     display_bridge_v8_prime_double_buffers(impl);
 
     /* Re-register VSYNC callbacks for new panel */
@@ -1318,6 +1656,7 @@ static esp_err_t display_bridge_v8_dummy_publish_pipeline(esp_lv_adapter_display
     }
     impl->disp_fb = frame_buffer;
     impl->draw_fb = next->buffer;
+    display_bridge_v8_diff_reset(impl);
     return ESP_OK;
 }
 
@@ -2125,8 +2464,17 @@ static void display_bridge_v8_flush_triple_diff(esp_lv_adapter_display_bridge_v8
 
     if (lv_disp_flush_is_last(drv)) {
         lv_disp_t *disp_refr = _lv_refr_get_disp_refreshing();
+        lv_area_t current[DISPLAY_BRIDGE_V8_DIFF_RECT_CAPACITY];
+        uint16_t current_count = 0;
+        uint8_t target_index = UINT8_MAX;
+        bool reset_tracker = false;
 
-        copy_unrendered_area_from_front_to_back(disp_refr, impl);
+        if (!display_bridge_v8_prepare_partial_back_buffer(
+                    impl, disp_refr, false, current, &current_count,
+                    &target_index, &reset_tracker)) {
+            display_manager_flush_ready(drv);
+            return;
+        }
 
 #if SOC_DMA2D_SUPPORTED
         display_cache_msync_framebuffer(impl->draw_fb, impl->runtime.frame_buffer_size);
@@ -2146,6 +2494,12 @@ static void display_bridge_v8_flush_triple_diff(esp_lv_adapter_display_bridge_v8
             }
             impl->disp_fb = impl->draw_fb;
             impl->draw_fb = next->buffer;
+            if (reset_tracker) {
+                display_bridge_v8_diff_reset(impl);
+            } else {
+                display_bridge_v8_diff_commit(
+                    impl, target_index, current, current_count);
+            }
         }
 #if CONFIG_ESP_LVGL_ADAPTER_PARTIAL_AUX_IMG_CACHE
         lv_img_cache_invalidate_src(NULL);
@@ -2254,8 +2608,17 @@ static void display_bridge_v8_flush_partial_rotate(esp_lv_adapter_display_bridge
     if (lv_disp_flush_is_last(drv)) {
 
         lv_disp_t *disp_refr = _lv_refr_get_disp_refreshing();
+        lv_area_t current[DISPLAY_BRIDGE_V8_DIFF_RECT_CAPACITY];
+        uint16_t current_count = 0;
+        uint8_t target_index = UINT8_MAX;
+        bool reset_tracker = false;
 
-        copy_unrendered_area_from_front_to_back(disp_refr, impl);
+        if (!display_bridge_v8_prepare_partial_back_buffer(
+                    impl, disp_refr, true, current, &current_count,
+                    &target_index, &reset_tracker)) {
+            display_manager_flush_ready(drv);
+            return;
+        }
 
 #if CONFIG_SOC_PPA_SUPPORTED
         if (!hw_resource.ppa_handle) {
@@ -2281,6 +2644,12 @@ static void display_bridge_v8_flush_partial_rotate(esp_lv_adapter_display_bridge
             }
             impl->disp_fb = impl->draw_fb;
             impl->draw_fb = next->buffer;
+            if (reset_tracker) {
+                display_bridge_v8_diff_reset(impl);
+            } else {
+                display_bridge_v8_diff_commit(
+                    impl, target_index, current, current_count);
+            }
         }
 #if CONFIG_ESP_LVGL_ADAPTER_PARTIAL_AUX_IMG_CACHE
         lv_img_cache_invalidate_src(NULL);
@@ -2494,6 +2863,167 @@ static void IRAM_ATTR rotate_copy_region(esp_lv_adapter_display_bridge_v8_t *imp
 /**********************
  *   HELPER FUNCTIONS
  **********************/
+
+static void copy_diff_repair_from_front_to_back(
+    esp_lv_adapter_display_bridge_v8_t *impl,
+    const lv_area_t *repair,
+    uint16_t repair_count)
+{
+    const uint16_t hor_res = bridge_h_res(impl);
+    const uint8_t color_bytes = bridge_color_bytes(impl);
+
+#if SOC_DMA2D_SUPPORTED
+    const uint16_t ver_res = bridge_v_res(impl);
+    if (repair_count != 0) {
+        display_cache_msync_framebuffer(impl->disp_fb,
+                                        impl->runtime.frame_buffer_size);
+    }
+#endif
+
+    for (uint16_t index = 0; index < repair_count; ++index) {
+        lv_area_t rect = repair[index];
+        size_t copy_w_px = (size_t)(rect.x2 - rect.x1 + 1);
+        size_t copy_h_px = (size_t)(rect.y2 - rect.y1 + 1);
+
+#if SOC_DMA2D_SUPPORTED
+        if (display_bridge_dma2d_window_is_compatible(
+                    impl->disp_fb, hor_res, rect.x1, copy_w_px, color_bytes) &&
+                display_bridge_dma2d_window_is_compatible(
+                    impl->draw_fb, hor_res, rect.x1, copy_w_px,
+                    color_bytes)) {
+#ifdef ESP_ASYNC_COLOR_CONVERT_AVAILABLE
+            async_color_convert_request_t transfer = {
+                .src_buffer = impl->disp_fb,
+                .dst_buffer = impl->draw_fb,
+                .src_stride = hor_res,
+                .src_height = ver_res,
+                .dst_stride = hor_res,
+                .dst_height = ver_res,
+                .src_x = rect.x1,
+                .src_y = rect.y1,
+                .dst_x = rect.x1,
+                .dst_y = rect.y1,
+                .copy_width = copy_w_px,
+                .copy_height = copy_h_px,
+                DMA2D_PIXEL_FORMAT_FIELD(color_bytes),
+            };
+#else
+            esp_async_fbcpy_trans_desc_t transfer = {
+                .src_buffer = impl->disp_fb,
+                .dst_buffer = impl->draw_fb,
+                .src_buffer_size_x = hor_res,
+                .src_buffer_size_y = ver_res,
+                .src_offset_x = rect.x1,
+                .src_offset_y = rect.y1,
+                .dst_buffer_size_x = hor_res,
+                .dst_buffer_size_y = ver_res,
+                .dst_offset_x = rect.x1,
+                .dst_offset_y = rect.y1,
+                .copy_size_x = copy_w_px,
+                .copy_size_y = copy_h_px,
+                DMA2D_PIXEL_FORMAT_FIELD(color_bytes),
+            };
+#endif
+            ESP_ERROR_CHECK(display_bridge_dma2d_copy_sync(
+                                &transfer, portMAX_DELAY));
+            continue;
+        }
+#endif
+
+        size_t copy_bytes = copy_w_px * color_bytes;
+        uint8_t *src = (uint8_t *)impl->disp_fb +
+                       ((size_t)rect.y1 * hor_res + rect.x1) * color_bytes;
+        uint8_t *dst = (uint8_t *)impl->draw_fb +
+                       ((size_t)rect.y1 * hor_res + rect.x1) * color_bytes;
+        for (size_t row = 0; row < copy_h_px; ++row) {
+            memcpy(dst, src, copy_bytes);
+            src += (size_t)hor_res * color_bytes;
+            dst += (size_t)hor_res * color_bytes;
+        }
+    }
+}
+
+static bool display_bridge_v8_prepare_partial_back_buffer(
+    esp_lv_adapter_display_bridge_v8_t *impl,
+    lv_disp_t *disp_refr,
+    bool dirty_to_physical,
+    lv_area_t *current,
+    uint16_t *current_count,
+    uint8_t *target_index,
+    bool *reset_tracker)
+{
+    lv_area_t repair[DISPLAY_BRIDGE_V8_REPAIR_CAPACITY];
+    uint16_t repair_count = 0;
+    uint16_t pending_count = 0;
+    uint8_t source_index = UINT8_MAX;
+    bool copy_baseline = true;
+
+    *current_count = 0;
+    *target_index = UINT8_MAX;
+    *reset_tracker = false;
+
+    bool current_valid = disp_refr != NULL &&
+                         display_bridge_v8_diff_capture_current(
+                             impl, disp_refr, current, current_count, dirty_to_physical);
+    *target_index =
+        display_bridge_v8_diff_buffer_index(impl, impl->draw_fb);
+    source_index =
+        display_bridge_v8_diff_buffer_index(impl, impl->disp_fb);
+    *reset_tracker = !current_valid || *target_index == UINT8_MAX ||
+                     source_index == UINT8_MAX;
+
+    if (!*reset_tracker) {
+        display_bridge_v8_diff_buffer_t *target =
+            &impl->diff_tracker.buffers[*target_index];
+        pending_count = target->pending_count;
+        if (target->valid && display_bridge_v8_diff_subtract(
+                    target->pending, target->pending_count,
+                    current, *current_count, repair, &repair_count)) {
+            display_bridge_v8_diff_buffer_t *source =
+                &impl->diff_tracker.buffers[source_index];
+            if (repair_count == 0 ||
+                    (source->valid &&
+                     source->revision == impl->diff_tracker.revision)) {
+                copy_baseline = false;
+            } else {
+                *reset_tracker = true;
+            }
+        }
+    }
+
+    ESP_LOGD(TAG,
+             "partial diff: rotated=%u target=%u source=%u baseline=%u"
+             " pending=%u current=%u repair=%u revision=%" PRIu32,
+             (unsigned)dirty_to_physical, (unsigned)*target_index,
+             (unsigned)source_index, (unsigned)copy_baseline,
+             (unsigned)pending_count, (unsigned)*current_count,
+             (unsigned)repair_count, impl->diff_tracker.revision);
+    for (uint16_t index = 0; index < repair_count && !copy_baseline; ++index) {
+        ESP_LOGV(TAG,
+                 "  repair[%u]: (%" PRId32 ",%" PRId32
+                 ")-(%" PRId32 ",%" PRId32 ") size=%" PRId32
+                 "x%" PRId32,
+                 (unsigned)index,
+                 (int32_t)repair[index].x1,
+                 (int32_t)repair[index].y1,
+                 (int32_t)repair[index].x2,
+                 (int32_t)repair[index].y2,
+                 (int32_t)(repair[index].x2 - repair[index].x1 + 1),
+                 (int32_t)(repair[index].y2 - repair[index].y1 + 1));
+    }
+
+    if (copy_baseline) {
+        if (disp_refr == NULL) {
+            ESP_LOGE(TAG, "No refreshing display for partial baseline");
+            return false;
+        }
+        copy_unrendered_area_from_front_to_back(disp_refr, impl);
+    } else {
+        copy_diff_repair_from_front_to_back(impl, repair, repair_count);
+    }
+
+    return true;
+}
 
 /**
  * @brief Copy unrendered areas from front buffer to back buffer

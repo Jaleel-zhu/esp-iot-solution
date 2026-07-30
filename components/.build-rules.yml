@@ -321,3 +321,7 @@ components/esp_xiaozhi/test_apps:
 components/storage/ramfs/test_apps:
   enable:
     - if: INCLUDE_DEFAULT == 1
+
+components/esp_gmp/test:
+  enable:
+    - if: SOC_BLE_SUPPORTED == 1 and IDF_VERSION_MAJOR >= 5

@@ -668,6 +668,30 @@ build_example_esp_flux_ble_spp_server:
   variables:
     EXAMPLE_DIR: examples/esp_flux/ble_spp_server
 
+build_example_esp_gmp_ble_gmp_ota_client:
+  extends:
+    - .build_examples_template
+    - .rules:build:example_esp_gmp_ble_gmp_ota_client
+    - .build_idf_active_release_version
+  variables:
+    EXAMPLE_DIR: examples/esp_gmp/gmp_ota/ble_gmp_ota_client
+
+build_example_esp_gmp_ble_gmp_ota_server:
+  extends:
+    - .build_examples_template
+    - .rules:build:example_esp_gmp_ble_gmp_ota_server
+    - .build_idf_active_release_version
+  variables:
+    EXAMPLE_DIR: examples/esp_gmp/gmp_ota/ble_gmp_ota_server
+
+build_components_esp_gmp_test:
+  extends:
+    - .build_examples_template
+    - .rules:build:components_esp_gmp_test
+    - .build_idf_active_release_version
+  variables:
+    EXAMPLE_DIR: components/esp_gmp/test
+
 build_example_get_started_blink:
   extends:
     - .build_examples_template

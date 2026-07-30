@@ -84,6 +84,10 @@
   - "components/esp_flux/**/*"
   - "tools/cmake_utilities/package_manager.cmake"
 
+.patterns-components_esp_gmp: &patterns-components_esp_gmp
+  - "components/esp_gmp/**/*"
+  - "tools/cmake_utilities/package_manager.cmake"
+
 .patterns-components_dali: &patterns-components_dali
   - "components/dali/**/*"
   - "tools/cmake_utilities/package_manager.cmake"
@@ -794,6 +798,14 @@
 
 .patterns-example_esp_flux_ble_spp_server: &patterns-example_esp_flux_ble_spp_server
   - "examples/esp_flux/ble_spp_server/**/*"
+
+.patterns-example_esp_gmp_ble_gmp_ota_client: &patterns-example_esp_gmp_ble_gmp_ota_client
+  - "examples/esp_gmp/gmp_ota/ble_gmp_ota_client/**/*"
+  - "examples/esp_gmp/gmp_ota/common_components/**/*"
+
+.patterns-example_esp_gmp_ble_gmp_ota_server: &patterns-example_esp_gmp_ble_gmp_ota_server
+  - "examples/esp_gmp/gmp_ota/ble_gmp_ota_server/**/*"
+  - "examples/esp_gmp/gmp_ota/common_components/**/*"
 
 .patterns-example_sensors_power_measure: &patterns-example_sensors_power_measure
   - "examples/sensors/power_measure/**/*"
@@ -1570,6 +1582,45 @@
       changes: *patterns-components_esp_flux
     - <<: *if-dev-push
       changes: *patterns-example_esp_flux_ble_spp_server
+
+.rules:build:example_esp_gmp_ble_gmp_ota_client:
+  rules:
+    - <<: *if-protected
+    - <<: *if-label-build
+    - <<: *if-dev-push
+      changes: *patterns-build_system
+    - <<: *if-dev-push
+      changes: *patterns-components_esp_gmp
+    - <<: *if-dev-push
+      changes: *patterns-components_esp_flux
+    - <<: *if-dev-push
+      changes: *patterns-example_esp_gmp_ble_gmp_ota_client
+
+.rules:build:example_esp_gmp_ble_gmp_ota_server:
+  rules:
+    - <<: *if-protected
+    - <<: *if-label-build
+    - <<: *if-dev-push
+      changes: *patterns-build_system
+    - <<: *if-dev-push
+      changes: *patterns-components_esp_gmp
+    - <<: *if-dev-push
+      changes: *patterns-components_esp_flux
+    - <<: *if-dev-push
+      changes: *patterns-example_esp_gmp_ble_gmp_ota_server
+
+.rules:build:components_esp_gmp_test:
+  rules:
+    - <<: *if-protected
+    - <<: *if-label-build
+    - <<: *if-label-target_test
+    - <<: *if-trigger-job
+    - <<: *if-dev-push
+      changes: *patterns-build_system
+    - <<: *if-dev-push
+      changes: *patterns-components_esp_gmp
+    - <<: *if-dev-push
+      changes: *patterns-components_esp_flux
 
 .rules:build:example_get_started_blink:
   rules:

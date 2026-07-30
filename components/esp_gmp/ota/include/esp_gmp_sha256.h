@@ -11,13 +11,14 @@
 #include <stdbool.h>
 
 #include "esp_err.h"
+#include "psa/crypto.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 typedef struct {
-    uint32_t opaque[32];
+    psa_hash_operation_t op;
     bool active;
 } esp_gmp_sha256_ctx_t;
 

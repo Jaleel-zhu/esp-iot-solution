@@ -863,7 +863,7 @@ build_example_usb_device_usb_dongle:
   extends:
     - .build_examples_template
     - .rules:build:example_usb_device_usb_dongle
-    - .build_idf_active_release_version
+    - .build_idf_ge_than_v5_3
   variables:
     EXAMPLE_DIR: examples/usb/device/usb_dongle
 

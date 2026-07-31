@@ -1,5 +1,11 @@
 # ChangeLog
 
+## v0.0.3 - 2026-08-03
+
+### Bug Fixes:
+
+* Call `ble_npl_event_deinit` before freeing the GATT destroy event in `gatt_session_destroy_event_fn`, avoiding an NPL event resource leak after scheduled session teardown.
+
 ## v0.0.2 - 2026-07-15
 
 ### Bug Fixes:

@@ -49,6 +49,7 @@ static void gatt_session_destroy_event_fn(struct ble_npl_event *ev)
         return;
     }
     (void)gatt_session_destroy(event->session);
+    ble_npl_event_deinit(ev);
     free(event);
 }
 

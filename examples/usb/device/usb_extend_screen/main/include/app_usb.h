@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2024-2026 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -13,12 +13,6 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-// #if CONFIG_IDF_TARGET_ESP32P4
-// #define JPEG_BUFFER_SIZE (300*1024)
-// #elif CONFIG_IDF_TARGET_ESP32S3
-// #define JPEG_BUFFER_SIZE (100*1024)
-// #endif
 
 #if CONFIG_HID_TOUCH_ENABLE
 typedef struct {
@@ -66,7 +60,7 @@ esp_err_t app_hid_init(void);
 esp_err_t app_vendor_init(void);
 #endif
 
-#if CFG_TUD_AUDIO
+#if CONFIG_UAC_AUDIO_ENABLE
 esp_err_t app_uac_init(void);
 #endif
 

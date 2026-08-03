@@ -927,9 +927,12 @@ build_example_usb_device_usb_extend_screen:
   extends:
     - .build_examples_template
     - .rules:build:example_usb_device_usb_extend_screen
-    - .build_idf_ge_than_v5_3
+    - .build_idf_ge_than_v5_4
   variables:
     EXAMPLE_DIR: examples/usb/device/usb_extend_screen
+    EXAMPLE_BOARD: esp32_p4_function_ev_board
+    IDF_TARGET: esp32p4
+    EXAMPLE_APPEND_ARGS: "-t esp32p4"
 
 build_example_usb_device_usb_webcam:
   extends:

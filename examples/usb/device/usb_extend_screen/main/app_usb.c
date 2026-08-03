@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2024-2026 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -15,6 +15,7 @@
 #include "esp_private/usb_phy.h"
 #include "usb_descriptors.h"
 #include "device/usbd.h"
+#include "app_lcd.h"
 #include "app_usb.h"
 
 static const char *TAG = "app_usb";
@@ -58,7 +59,13 @@ static void tusb_device_task(void *arg)
 esp_err_t app_usb_init(void)
 {
     esp_err_t ret = ESP_OK;
+    uint16_t screen_width;
+    uint16_t screen_height;
 
+    ESP_RETURN_ON_ERROR(app_lcd_get_resolution(&screen_width, &screen_height),
+                        TAG, "get display resolution failed");
+    ESP_RETURN_ON_ERROR(usb_descriptors_init(screen_width, screen_height),
+                        TAG, "initialize USB descriptors failed");
     ESP_RETURN_ON_ERROR(usb_phy_init(), TAG, "USB PHY init failed");
     bool usb_init = tusb_init();
     if (!usb_init) {
@@ -76,7 +83,7 @@ esp_err_t app_usb_init(void)
     ESP_RETURN_ON_FALSE(ret == ESP_OK, ESP_FAIL, TAG, "app_hid_init failed");
 #endif
 
-#if CFG_TUD_AUDIO
+#if CONFIG_UAC_AUDIO_ENABLE
     ret =  app_uac_init();
     ESP_RETURN_ON_FALSE(ret == ESP_OK, ESP_FAIL, TAG, "app_uac_init failed");
 #endif

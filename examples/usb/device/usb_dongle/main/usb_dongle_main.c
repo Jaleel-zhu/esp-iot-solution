@@ -145,12 +145,13 @@ void app_main(void)
     };
 
     ESP_ERROR_CHECK(tusb_cdc_acm_init(&amc_cfg));
-    esp_tusb_init_console(TINYUSB_CDC_ACM_0);
+    ESP_ERROR_CHECK(esp_tusb_init_console(TINYUSB_CDC_ACM_0));
 #elif CONFIG_UART_ENABLE
     initialise_uart();
 #endif /* CFG_TUD_CDC */
 
-    ESP_LOGI(TAG, "USB initialization DONE");
+    // stdout/stderr may have been redirected to USB CDC above.
+    ESP_EARLY_LOGI(TAG, "USB initialization DONE");
 
 #ifdef CONFIG_HEAP_TRACING
     heap_trace_init_standalone(trace_record, NUM_RECORDS);

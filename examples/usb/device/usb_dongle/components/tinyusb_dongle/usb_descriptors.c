@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2020-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2020-2026 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -13,11 +13,13 @@
  * Same VID/PID with different interface e.g MSC (first), then CDC (later) will possibly cause system error on PC.
  *
  * Auto ProductID layout's Bitmap:
- *   [MSB]         HID | MSC | CDC          [LSB]
+ *   [MSB]  DFU | BTH | NCM | ECM | RNDIS | MIDI | HID | MSC | CDC  [LSB]
  */
 #define _PID_MAP(itf, n) ((CFG_TUD_##itf) << (n))
 #define USB_TUSB_PID (0x4000 | _PID_MAP(CDC, 0) | _PID_MAP(MSC, 1) | _PID_MAP(HID, 2) | \
-    _PID_MAP(MIDI, 3) ) //| _PID_MAP(AUDIO, 4) | _PID_MAP(VENDOR, 5) )
+    _PID_MAP(MIDI, 3) | (CONFIG_TINYUSB_NET_MODE_RNDIS << 4) | \
+    (CONFIG_TINYUSB_NET_MODE_ECM << 5) | _PID_MAP(NCM, 6) | _PID_MAP(BTH, 7) | \
+    _PID_MAP(DFU, 8))
 
 /**** Kconfig driven Descriptor ****/
 

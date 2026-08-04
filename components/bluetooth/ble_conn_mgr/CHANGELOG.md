@@ -1,5 +1,13 @@
 # ChangeLog
 
+## v1.2.1 - 2026-08-04
+
+### Enhancements:
+
+- Post `ESP_BLE_CONN_EVENT_STARTED` when the NimBLE host syncs and the stack is ready (after address resolution and advertising/scanning have begun), so applications can react without polling `ble_hs_synced()`.
+- Add `esp_ble_conn_whitelist_sync_bonds()` to rebuild the controller whitelist from bonded peers (`ble_store_util_bonded_peers` → `ble_gap_wl_set`), for bonded-only advertising/scanning with `filter_policy = ESP_BLE_CONN_SCAN_FILT_USE_WL`. Call after a bond is added or removed; RPA resolution remains handled by NimBLE privacy (`CONFIG_BT_NIMBLE_HS_PVCY`).
+
+
 ## v1.2.0 - 2026-05-12
 
 ### Enhancements:

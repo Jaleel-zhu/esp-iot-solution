@@ -2840,6 +2840,11 @@ static void esp_ble_conn_on_sync(void)
     /* Begin scanning for a peripheral to connect to. */
     esp_ble_conn_scan(s_conn_session);
 #endif
+
+    /* Notify the application that the NimBLE host is synced and the stack is
+       ready (advertising/scanning have begun). */
+    esp_event_post(BLE_CONN_MGR_EVENTS, ESP_BLE_CONN_EVENT_STARTED,
+                   NULL, 0, portMAX_DELAY);
 }
 
 static void esp_ble_conn_on_gatts_register(struct ble_gatt_register_ctxt *ctxt, void *arg)
@@ -4086,6 +4091,28 @@ esp_err_t esp_ble_conn_periodic_adv_data_set(const uint8_t *data, uint16_t len)
     return ESP_OK;
 #endif
 #endif
+}
+
+esp_err_t esp_ble_conn_whitelist_sync_bonds(void)
+{
+    ble_addr_t peer_addrs[CONFIG_BT_NIMBLE_MAX_BONDS];
+    int num_peers = 0;
+
+    int rc = ble_store_util_bonded_peers(peer_addrs, &num_peers,
+                                         sizeof(peer_addrs) / sizeof(peer_addrs[0]));
+    if (rc != 0) {
+        ESP_LOGE(TAG, "Failed to read bonded peers; rc=%d", rc);
+        return ESP_FAIL;
+    }
+
+    rc = ble_gap_wl_set(peer_addrs, (uint8_t)num_peers);
+    if (rc != 0) {
+        ESP_LOGE(TAG, "ble_gap_wl_set failed; rc=%d", rc);
+        return ESP_FAIL;
+    }
+
+    ESP_LOGI(TAG, "Whitelist synced from %d bonded peer(s)", num_peers);
+    return ESP_OK;
 }
 
 esp_err_t esp_ble_conn_adv_start(void)

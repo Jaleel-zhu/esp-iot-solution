@@ -107,7 +107,7 @@ uintptr_t elf_remap_text(esp_elf_t *elf, uintptr_t sym)
  * @return None
  */
 #ifdef CONFIG_ELF_LOADER_LOAD_PSRAM
-void IRAM_ATTR esp_elf_arch_flush(uint32_t addr, uint32_t size)
+void IRAM_ATTR esp_elf_arch_flush(void)
 {
     extern void spi_flash_disable_interrupts_caches_and_other_cpu(void);
     extern void spi_flash_enable_interrupts_caches_and_other_cpu(void);
@@ -115,9 +115,14 @@ void IRAM_ATTR esp_elf_arch_flush(uint32_t addr, uint32_t size)
 #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
 
 #if CONFIG_IDF_TARGET_ESP32S31
-    Cache_WriteBack_Addr(CACHE_MAP_L1_DCACHE, addr, size);
+    /* ESP32-S31: Ranged cache APIs (Cache_WriteBack_Addr/Cache_Invalidate_Addr)
+     * cause intermittent Instruction access faults (MCAUSE=0x01,
+     * MEPC=0x00000000) during long-term ELF execution from PSRAM, likely
+     * related to unaligned addr/size (e.g. seg_size=0x136a8, cache_line=64B).
+     * Use full D-writeback + I-invalidate like other targets. */
+    Cache_WriteBack_All(CACHE_MAP_L1_DCACHE);
     spi_flash_disable_interrupts_caches_and_other_cpu();
-    Cache_Invalidate_Addr(CACHE_MAP_L1_ICACHE_MASK, addr, size);
+    Cache_Invalidate_All(CACHE_MAP_L1_ICACHE_MASK);
     spi_flash_enable_interrupts_caches_and_other_cpu();
     REG_CLR_BIT(CACHE_L1_ICACHE_CTRL_REG, CACHE_L1_ICACHE_SHUT_IBUS1);
 #else

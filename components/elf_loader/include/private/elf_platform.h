@@ -64,13 +64,10 @@ uintptr_t elf_remap_text(esp_elf_t *elf, uintptr_t sym);
 /**
  * @brief Flush data from cache to external RAM.
  *
- * @param addr  Start address of the memory region to flush
- * @param size  Size of the memory region to flush
- *
  * @return None
  */
 #ifdef CONFIG_ELF_LOADER_LOAD_PSRAM
-void esp_elf_arch_flush(uint32_t addr, uint32_t size);
+void esp_elf_arch_flush(void);
 #endif
 
 /**

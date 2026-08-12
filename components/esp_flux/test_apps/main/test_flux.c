@@ -117,7 +117,7 @@ typedef struct {
 
 static void test_on_complete(flux_session_t *s, uint8_t stream_id, esp_err_t status, const uint8_t *data, uint32_t size)
 {
-    test_state_t *ts = (test_state_t *)s->callbacks.arg;
+    test_state_t *ts = (test_state_t *)flux_session_get_user_arg(s);
     (void)data;
     (void)size;
     ts->complete_stream_id = stream_id;
@@ -127,7 +127,7 @@ static void test_on_complete(flux_session_t *s, uint8_t stream_id, esp_err_t sta
 
 static void test_on_data_received(flux_session_t *s, uint8_t stream_id, const uint8_t *data, uint32_t size)
 {
-    test_state_t *ts = (test_state_t *)s->callbacks.arg;
+    test_state_t *ts = (test_state_t *)flux_session_get_user_arg(s);
     ts->recv_stream_id = stream_id;
     ts->received_data = data;
     ts->received_size = size;
@@ -136,7 +136,7 @@ static void test_on_data_received(flux_session_t *s, uint8_t stream_id, const ui
 
 static void test_on_error(flux_session_t *s, esp_err_t error)
 {
-    test_state_t *ts = (test_state_t *)s->callbacks.arg;
+    test_state_t *ts = (test_state_t *)flux_session_get_user_arg(s);
     ts->error_occurred = true;
     ts->error_code = error;
 }

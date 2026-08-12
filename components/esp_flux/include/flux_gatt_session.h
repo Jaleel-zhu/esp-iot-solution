@@ -42,12 +42,14 @@ typedef void (*session_complete_cb)(gatt_session_t *session, uint8_t stream_id, 
 typedef void (*data_received_cb)(gatt_session_t *session, uint8_t stream_id, const uint8_t *data, uint32_t size);
 typedef void (*progress_cb)(gatt_session_t *session, uint32_t transferred, uint32_t total);
 typedef void (*error_cb)(gatt_session_t *session, esp_err_t error);
+typedef void (*mtu_changed_cb)(gatt_session_t *session, uint16_t mtu);
 
 typedef struct {
     session_complete_cb session_complete_cb;
     data_received_cb data_received_cb;
     progress_cb progress_cb;
     error_cb error_cb;
+    mtu_changed_cb mtu_changed_cb;
     void *arg;
 } ble_session_callbacks_t;
 
@@ -95,19 +97,38 @@ esp_err_t gatt_session_destroy(gatt_session_t *session);
 esp_err_t gatt_session_schedule_destroy(gatt_session_t *session);
 esp_err_t gatt_session_set_mtu(gatt_session_t *session, uint16_t mtu);
 
-// Fragment send API (delegates to flux_session)
-esp_err_t gatt_session_fragment_send(gatt_session_t *session, const uint8_t *data,
-                                     uint32_t size, uint8_t window_size, uint8_t window_threshold_percent);
-bool gatt_session_fragment_send_idle(gatt_session_t *session);
-bool gatt_session_fragment_send_is_complete(gatt_session_t *session, uint8_t stream_id);
-uint8_t gatt_session_fragment_send_get_progress(gatt_session_t *session, uint8_t stream_id);
-esp_err_t gatt_session_fragment_send_reset(gatt_session_t *session, uint8_t stream_id);
+/** Underlying flux protocol session (may be NULL if not yet created / destroyed). */
+flux_session_t *gatt_session_get_flux(const gatt_session_t *session);
 
-// Fragment recv state API (callback-only data delivery model)
-bool gatt_session_fragment_recv_idle(gatt_session_t *session);
-bool gatt_session_fragment_recv_is_complete(gatt_session_t *session, uint8_t stream_id);
-uint8_t gatt_session_fragment_recv_get_progress(gatt_session_t *session, uint8_t stream_id);
-esp_err_t gatt_session_fragment_recv_reset(gatt_session_t *session, uint8_t stream_id);
+/** Negotiated / configured MTU for this GATT session. */
+uint16_t gatt_session_get_mtu(const gatt_session_t *session);
+
+/*
+ * Send / recv API — names align with flux_session_send / flux_session_recv_*.
+ * The gatt_session_fragment_* symbols remain as deprecated aliases.
+ */
+esp_err_t gatt_session_send(gatt_session_t *session, const uint8_t *data,
+                            uint32_t size, uint8_t window_size, uint8_t window_threshold_percent);
+bool gatt_session_send_idle(gatt_session_t *session);
+bool gatt_session_send_is_complete(gatt_session_t *session, uint8_t stream_id);
+uint8_t gatt_session_send_get_progress(gatt_session_t *session, uint8_t stream_id);
+esp_err_t gatt_session_send_reset(gatt_session_t *session, uint8_t stream_id);
+
+bool gatt_session_recv_idle(gatt_session_t *session);
+bool gatt_session_recv_is_complete(gatt_session_t *session, uint8_t stream_id);
+uint8_t gatt_session_recv_get_progress(gatt_session_t *session, uint8_t stream_id);
+esp_err_t gatt_session_recv_reset(gatt_session_t *session, uint8_t stream_id);
+
+/** @deprecated Use gatt_session_send / gatt_session_send_* / gatt_session_recv_* */
+#define gatt_session_fragment_send              gatt_session_send
+#define gatt_session_fragment_send_idle         gatt_session_send_idle
+#define gatt_session_fragment_send_is_complete  gatt_session_send_is_complete
+#define gatt_session_fragment_send_get_progress gatt_session_send_get_progress
+#define gatt_session_fragment_send_reset        gatt_session_send_reset
+#define gatt_session_fragment_recv_idle         gatt_session_recv_idle
+#define gatt_session_fragment_recv_is_complete  gatt_session_recv_is_complete
+#define gatt_session_fragment_recv_get_progress gatt_session_recv_get_progress
+#define gatt_session_fragment_recv_reset        gatt_session_recv_reset
 
 #ifdef __cplusplus
 }

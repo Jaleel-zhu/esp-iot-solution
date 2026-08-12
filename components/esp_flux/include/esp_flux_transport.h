@@ -8,10 +8,8 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include "esp_err.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/semphr.h"
-#include "sys/queue.h"
 
 #ifdef __cplusplus
 extern "C"
@@ -55,9 +53,8 @@ _Static_assert(FLUX_MAX_FRAGMENTS <= FLUX_SACK_BITMAP_SIZE * 8,
 
 /* ────────────────────── Transport Layer Interface ────────────────────── */
 
-// Forward declaration
+/** Opaque session handle — layout is private (see esp_flux_session_priv.h). */
 typedef struct flux_session flux_session_t;
-SLIST_HEAD(flux_session_list, flux_session);
 
 /**
 * @brief Transport layer operations (implemented by the actual transport, e.g., BLE, Wi-Fi, UART)
@@ -112,90 +109,6 @@ typedef struct {
     void *arg;
 } flux_callbacks_t;
 
-/* ────────────────────── Internal State Structures ────────────────────── */
-
-/**
-* @brief Fragment receive state (reassembly tracking)
-*/
-typedef struct {
-    bool recv_active;                               // Whether actively receiving fragment data
-    uint8_t stream_id;                              // Stream ID this slot is reassembling (from packet control nibble)
-    uint16_t total_fragments;                       // Total expected fragment count
-    uint16_t received_fragments;                    // Number of fragments received so far
-    uint32_t total_size;                            // Total expected data size
-    uint32_t received_size;                         // Data received so far (bytes)
-    uint8_t *reassembly_buffer;                     // Buffer for reassembling fragments
-    uint32_t reassembly_buffer_size;                // Size of reassembly buffer
-    uint8_t fragment_bitmap[FLUX_SACK_BITMAP_SIZE]; // Bitmap tracking received fragments
-    uint32_t start_time;                            // Transfer start time (ms)
-    uint32_t last_fragment_time;                    // Last fragment arrival time (ms)
-    // ACK tracking
-    uint16_t last_continuous_seq;     // Last continuously received sequence number
-    uint32_t last_ack_time;           // Time of last ACK sent
-    uint32_t last_continuous_time;    // Time of last continuous fragment received
-    bool pending_ack;                 // Whether there is a pending ACK to send
-    uint8_t window_size;              // Receive window size (from START packet)
-    uint8_t window_threshold_percent; // Window occupancy threshold for immediate SACK
-    uint16_t last_ack_missing_count;  // Missing fragment count at last ACK
-    uint16_t acked_fragments;         // Fragments acknowledged via ACK
-    uint16_t first_fragment_size;     // Data size of first fragment (START packet)
-} flux_fragment_recv_state_t;
-
-/**
-* @brief Fragment send state (transmission tracking)
-*/
-typedef struct {
-    bool send_active;                 // Whether actively sending fragment data
-    uint8_t stream_id;                // Stream ID stamped into this transfer's packets (control nibble)
-    bool completed;                   // Terminal result pending: completion callback to be fired in the task loop
-    uint8_t max_retries;              // Maximum retries per fragment
-    esp_err_t complete_status;        // Terminal status (ESP_OK or error) to report to session_complete_cb
-    uint16_t total_fragments;         // Total fragment count
-    uint16_t sent_fragments;          // Total number of ACKed fragments (monotonically increasing count)
-    uint32_t total_size;              // Total data size
-    uint32_t sent_size;               // Acknowledged data size (bytes)
-    const uint8_t *source_data;       // Source data pointer (not copied)
-    uint32_t source_size;             // Source data size
-    uint16_t current_fragment;        // Current fragment index being sent
-    uint8_t window_size;              // Sliding window size (0xFF = unlimited)
-    uint8_t window_threshold_percent; // Window threshold for immediate SACK
-    uint16_t in_flight;               // Sent but unacknowledged fragment count
-    bool *fragment_acked;             // Per-fragment acknowledgment state
-    uint32_t start_time;              // Transfer start time (ms)
-    uint32_t last_send_time;          // Last fragment send time (ms)
-    // SACK / retransmission tracking
-    uint32_t *fragment_send_time;   // Send timestamp per fragment
-    uint8_t *fragment_retry_count;  // Retry count per fragment
-    uint32_t retransmit_timeout_ms; // Retransmission timeout
-} flux_fragment_send_state_t;
-
-/* ────────────────────── Session Structure ────────────────────── */
-
-/**
-* @brief A flux session manages the reliable transmission state for one logical link.
-*
-* Created per-connection. Multiple sessions can coexist for multi-connection scenarios.
-*/
-struct flux_session {
-    SLIST_ENTRY(flux_session) next;
-    uint8_t next_stream_id;          // Rolling stream_id allocator for new send transfers
-    uint32_t id;                     // Session identifier
-    uint16_t mtu_size;               // Current MTU
-    uint16_t max_fragment_data_size; // Max payload in a FRAGMENT packet
-    uint16_t max_start_data_size;    // Max payload in a START packet
-    const flux_transport_ops_t *ops; // Transport layer operations
-    void *transport_ctx;             // Opaque transport context
-    flux_callbacks_t callbacks;      // Application callbacks
-    SemaphoreHandle_t state_mutex;   // Per-session state lock for public APIs and tx task
-    bool destroying;                 // True once destroy starts; blocks new callbacks
-    uint16_t callback_pending;       // Number of queued callbacks not yet entered
-    uint16_t callback_inflight;      // Number of callbacks currently executing
-    bool last_completed_recv_valid;  // Whether a stream has just completed and is queryable
-    uint8_t last_completed_recv_stream_id; // Stream id for the most recent completed receive
-    flux_fragment_recv_state_t fragment_recv[FLUX_MAX_CONCURRENT_RECVS];  // Concurrent receive reassembly slots
-    flux_fragment_send_state_t fragment_send[FLUX_MAX_CONCURRENT_SENDS];  // Concurrent send slots
-};
-
 /* ────────────────────── Public API ────────────────────── */
 
 /**
@@ -221,6 +134,29 @@ esp_err_t flux_session_destroy(flux_session_t *session);
 * @brief Update the MTU for a session (e.g., after MTU negotiation)
 */
 esp_err_t flux_session_set_mtu(flux_session_t *session, uint16_t mtu);
+
+/**
+* @brief Get the current MTU for a session
+*/
+uint16_t flux_session_get_mtu(const flux_session_t *session);
+
+/**
+* @brief Get the session identifier assigned at create time
+*/
+uint32_t flux_session_get_id(const flux_session_t *session);
+
+/**
+* @brief Get the user argument from the session's callback config
+*/
+void *flux_session_get_user_arg(const flux_session_t *session);
+
+/**
+* @brief Maximum reassembled message size for the current MTU (bytes)
+*
+* Equals max START payload + (FLUX_MAX_FRAGMENTS - 1) * max FRAGMENT payload.
+* Returns 0 if the session is NULL or MTU has not been applied yet.
+*/
+size_t flux_session_max_message_bytes(const flux_session_t *session);
 
 /**
 * @brief Start sending data with automatic fragmentation
@@ -293,16 +229,6 @@ uint8_t flux_session_recv_get_progress(flux_session_t *session, uint8_t stream_i
 * is responsible for free()ing the data pointer received in the callback.
 */
 esp_err_t flux_session_recv_reset(flux_session_t *session, uint8_t stream_id);
-
-/**
-* @brief Allocate a free send slot (neither active nor pending a completion callback). Returns NULL if all busy.
-*/
-flux_fragment_send_state_t *flux_session_send_alloc(flux_session_t *session);
-
-/**
-* @brief Find the active send slot stamped with the given stream_id (e.g. to route an incoming SACK).
-*/
-flux_fragment_send_state_t *flux_session_send_find(flux_session_t *session, uint8_t stream_id);
 
 #ifdef __cplusplus
 }

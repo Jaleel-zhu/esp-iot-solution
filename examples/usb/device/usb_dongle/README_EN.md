@@ -115,6 +115,11 @@ ESP32-S2/S3 have limited USB endpoint resources and support the following maximu
 * The ESP32-S2/S3 USB controller provides 7 endpoints including EP0, with at most 5 IN endpoints including EP0. Therefore, ECM/RNDIS, BTH, and CDC cannot be enabled simultaneously. When ECM/RNDIS and BTH are enabled, disable CDC, use UART for commands, and configure it through `Example Configuration`.
 * The ESP32-P4/S31 USB High-Speed controller provides 16 endpoints including EP0, with at most 8 IN endpoints including EP0. In terms of endpoint resources, ECM/RNDIS, BTH, and CDC can be enabled simultaneously.
 * Available combinations are also limited by chip capabilities, memory, and application partition size. Enabling multiple USB classes may require a larger app partition.
+* When using USB-BTH, note that:
+  * Disable CDC (and the network class) so BTH occupies USB interface 0; otherwise the host may enumerate USB but never create `hciX`.
+  * Set `BTH ISO ALT COUNT` to 1 or 2; the default is 1.
+  * For ESP32-S3, use `sdkconfig.ci.bth` via `idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.ci.bth" set-target esp32s3`.
+  * For ESP32-S31, use `sdkconfig.ci.bth` via `idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.ci.bth" --preview set-target esp32s31`.
 
 ### 2.5 build & flash & monitor
 

@@ -112,6 +112,11 @@ ESP32-S2/S3 受 USB 端点资源限制，最多支持如下组合：
 * ESP32-S2/S3 的 USB 控制器共有 7 个端点（包括 EP0），最多支持 5 个 IN 端点（包括 EP0），因此不能同时使能 ECM/RNDIS、BTH 和 CDC。同时使能 ECM/RNDIS 和 BTH 时，应禁用 CDC 并使用 UART 发送命令；可以通过 `Example Configuration` 配置串口。
 * ESP32-P4/S31 的 USB High-Speed 控制器共有 16 个端点（包括 EP0），最多支持 8 个 IN 端点（包括 EP0）。从端点资源看，可以同时使能 ECM/RNDIS、BTH 和 CDC。
 * 实际可用组合还受芯片功能、内存和应用分区大小限制；同时使能多个 USB Class 时，可能需要增大 app 分区。
+* 使用 USB-BTH 时请注意：
+  * 关闭 CDC（以及网卡 Class），让 BTH 占用 USB interface 0；否则主机可能只能看到 USB 设备，无法创建 `hciX`。
+  * `BTH ISO ALT COUNT` 设置成 1 或者 2，默认为 1。
+  * ESP32-S3 可使用 `sdkconfig.ci.bth`（`idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.ci.bth" set-target esp32s3`）。
+  * ESP32-S31 可使用 `sdkconfig.ci.bth`（`idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.ci.bth" --preview set-target esp32s31`）。
 
 ### 2.5 固件编译&烧录
 

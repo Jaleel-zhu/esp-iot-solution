@@ -1664,10 +1664,10 @@ static uint8_t display_manager_required_buffer_count(const esp_lv_adapter_displa
 uint8_t display_manager_required_frame_buffer_count(esp_lv_adapter_tear_avoid_mode_t tear_avoid_mode,
                                                     esp_lv_adapter_rotation_t rotation)
 {
-    /* Rotation 90° or 270° always requires 3 buffers for rotation processing.
+    /* Any non-zero rotation requires 3 buffers for rotation processing.
      * DOUBLE_PARTIAL has its own drawing buffers and is out of scope here.
      */
-    if ((rotation == ESP_LV_ADAPTER_ROTATE_90 || rotation == ESP_LV_ADAPTER_ROTATE_270)
+    if (rotation != ESP_LV_ADAPTER_ROTATE_0
             && tear_avoid_mode != ESP_LV_ADAPTER_TEAR_AVOID_MODE_DOUBLE_PARTIAL) {
         return 3;
     }

@@ -245,8 +245,8 @@ uint8_t num_fbs = esp_lv_adapter_get_required_frame_buffer_count(
 ```
 
 **帧缓冲数量规则**：
-- 90°/270° 旋转 或 三缓冲模式：需要 **3** 个帧缓冲
-- 双缓冲模式：需要 **2** 个帧缓冲
+- 非 0° 旋转（`DOUBLE_PARTIAL` 除外）或三缓冲模式：需要 **3** 个帧缓冲
+- 未旋转的双缓冲模式以及 `DOUBLE_PARTIAL`：需要 **2** 个帧缓冲
 - 单缓冲模式：需要 **1** 个帧缓冲
 
 #### 防撕裂模式选择
@@ -257,8 +257,8 @@ uint8_t num_fbs = esp_lv_adapter_get_required_frame_buffer_count(
 |-----------|---------|---------|---------|---------|
 | `TRIPLE_PARTIAL` | 旋转（90°/270°）<br>高分辨率流畅 UI | 3 | 高 | RGB / MIPI DSI |
 | `TRIPLE_FULL` | 整屏/大区域刷新<br>内存充足 | 3 | 高 | RGB / MIPI DSI |
-| `DOUBLE_FULL` | 大区域刷新<br>内存较紧 | 2 | 中 | RGB / MIPI DSI |
-| `DOUBLE_DIRECT` | 小区域更新<br>控件/局部变化 | 2 | 中 | RGB / MIPI DSI |
+| `DOUBLE_FULL` | 大区域刷新<br>内存较紧 | 2，旋转时为 3 | 中 / 高 | RGB / MIPI DSI |
+| `DOUBLE_DIRECT` | 小区域更新<br>控件/局部变化 | 2，旋转时为 3 | 中 / 高 | RGB / MIPI DSI |
 | `TE_SYNC` | SPI/I2C/I80/QSPI 接口<br>面板提供 TE 信号，通过垂直消隐同步消除撕裂 | 1 | 低 | SPI / I2C / I80 / QSPI |
 | `NONE` | 静态 UI<br>超低内存 | 1 | 低 | 所有接口 |
 

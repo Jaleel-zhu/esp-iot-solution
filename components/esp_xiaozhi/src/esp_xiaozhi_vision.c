@@ -119,7 +119,9 @@ esp_err_t esp_xiaozhi_vision_explain_jpeg(const esp_xiaozhi_vision_t *vision,
     const size_t footer_len = boundary_len + 8;
     const size_t body_len = part1_len + part2_len + jpeg_len + footer_len;
 
-    uint8_t *body = (uint8_t *)heap_caps_malloc(body_len, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    uint8_t *body = (uint8_t *)heap_caps_calloc_prefer(1, body_len, 2,
+                                                       MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT,
+                                                       MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     ESP_RETURN_ON_FALSE(body != NULL, ESP_ERR_NO_MEM, log_tag, "Failed to allocate HTTP body");
 
     uint8_t *cursor = body;

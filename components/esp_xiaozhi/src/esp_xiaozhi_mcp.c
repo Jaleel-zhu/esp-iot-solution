@@ -73,7 +73,7 @@ esp_err_t esp_xiaozhi_mcp_handle_message(esp_mcp_mgr_handle_t mgr_handle,
         }
         cJSON_Delete(response_root);
         esp_mcp_mgr_req_destroy_response(mgr_handle, outbuf);
-    } else if (ret != ESP_ERR_NOT_FOUND) {
+    } else if (ret != ESP_ERR_NOT_FOUND && ret != ESP_OK) {
         ESP_LOGW(TAG, "Failed to process MCP message: %s", esp_err_to_name(ret));
     }
 

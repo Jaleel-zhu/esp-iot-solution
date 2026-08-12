@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.1.2
+
+### Fixed
+
+- **MCP session lifecycle**: Clear MCP manager session state on server hello, goodbye, and audio channel close so MCP runtime state stays aligned with the audio session lifecycle.
+- **MCP request context**: Set and reset per-request MCP context with the current audio `session_id` while handling inbound MCP messages.
+- **MCP response logging**: Avoid warning logs when MCP request handling returns `ESP_OK` without a response payload.
+- **Board JSON heap field**: Export `minimum_free_heap_size` as a string in board JSON to avoid a type/format mismatch when serializing `esp_get_minimum_free_heap_size()`.
+- **MQTT endpoint parsing**: Added `esp_xiaozhi_mqtt_parse_endpoint()` to correctly parse broker URLs (`mqtt://`, `tcp://`, `mqtts://`, `ssl://`), optional ports, and bracketed IPv6 hosts; infer TCP vs SSL transport and attach the certificate bundle only for SSL connections.
+
 ## v0.1.1
 
 This release updates `esp_xiaozhi` for build compatibility with both **ESP-IDF 5.5** and **ESP-IDF 6.0+**, while keeping the existing WebSocket and MQTT+UDP Xiaozhi chat APIs compatible with v0.1.0.

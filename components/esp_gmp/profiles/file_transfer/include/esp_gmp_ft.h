@@ -12,13 +12,11 @@
 
 #include "esp_err.h"
 #include "esp_gmp.h"
+#include "esp_gmp_profile.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-/** GMP command group assigned to the file transfer profile. */
-#define ESP_GMP_GRP_FILE_TRANSFER 0x08
 
 /** Base for component-specific esp_err_t values. */
 #define ESP_ERR_FILE_TRANSFER_BASE        0x7500
@@ -84,6 +82,15 @@ typedef struct {
 typedef void (*esp_file_transfer_event_cb_t)(const esp_file_transfer_event_t *event,
                                              void *event_ctx);
 
+/**
+ * @brief Optional inbound-transfer accept hook.
+ *
+ * Called after META validation and before opening the receive file.
+ * Return false to reject the transfer. NULL accept_cb means accept all.
+ */
+typedef bool (*esp_file_transfer_accept_cb_t)(const char *file_name, uint64_t file_size,
+                                              const uint8_t sha256[32], void *ctx);
+
 /** Component initialization configuration. */
 typedef struct {
     const char *recv_dir;
@@ -92,6 +99,14 @@ typedef struct {
     size_t block_size;
     esp_file_transfer_event_cb_t event_cb;
     void *event_ctx;
+    /**
+     * Optional unified profile event callback.
+     * At least one of @c event_cb or @c profile_event_cb must be set.
+     */
+    void (*profile_event_cb)(const esp_gmp_profile_event_t *event, void *ctx);
+    void *profile_event_ctx;
+    esp_file_transfer_accept_cb_t accept_cb; /* NULL = accept all */
+    void *accept_ctx;
 } esp_file_transfer_config_t;
 
 /** Parameters for starting an outbound transfer. */
@@ -99,6 +114,25 @@ typedef struct {
     const char *src_path;
     const char *remote_name;
 } esp_file_transfer_send_param_t;
+
+/**
+ * @brief Application-provided reader for stream sends.
+ *
+ * Must fill up to @p len bytes at @p offset into @p buf and return the actual
+ * length via @p out_len. Return ESP_OK on success.
+ */
+typedef esp_err_t (*esp_file_transfer_read_fn_t)(void *ctx, size_t offset, uint8_t *buf,
+                                                 size_t len, size_t *out_len);
+
+/** Parameters for starting an outbound stream transfer (no filesystem path). */
+typedef struct {
+    esp_file_transfer_read_fn_t read_fn;
+    void *read_ctx;
+    uint64_t file_size;
+    const char *remote_name;
+    const uint8_t *sha256; /**< Optional precomputed digest; NULL = hash while reading. */
+    esp_gmp_link_t link;   /**< NULL = use config gmp_link. */
+} esp_file_transfer_send_stream_param_t;
 
 /** Consistent snapshot returned by esp_file_transfer_get_status(). */
 typedef struct {
@@ -128,6 +162,11 @@ esp_err_t esp_file_transfer_deinit(void);
 esp_err_t esp_file_transfer_send(const esp_file_transfer_send_param_t *param);
 
 /**
+ * @brief Start an asynchronous outbound stream transfer via read_fn.
+ */
+esp_err_t esp_file_transfer_send_stream(const esp_file_transfer_send_stream_param_t *param);
+
+/**
  * @brief Cancel the active transfer.
  */
 esp_err_t esp_file_transfer_abort(void);
@@ -153,6 +192,37 @@ void esp_file_transfer_on_link_down(esp_gmp_link_t link);
  * @brief Notify the component of an unrecoverable transport error.
  */
 void esp_file_transfer_on_transport_error(esp_gmp_link_t link, esp_err_t error);
+
+/* Unified esp_gmp_ft_* aliases (profile naming). */
+static inline esp_err_t esp_gmp_ft_init(const esp_file_transfer_config_t *config)
+{
+    return esp_file_transfer_init(config);
+}
+
+static inline esp_err_t esp_gmp_ft_deinit(void)
+{
+    return esp_file_transfer_deinit();
+}
+
+static inline esp_err_t esp_gmp_ft_send(const esp_file_transfer_send_param_t *param)
+{
+    return esp_file_transfer_send(param);
+}
+
+static inline esp_err_t esp_gmp_ft_send_stream(const esp_file_transfer_send_stream_param_t *param)
+{
+    return esp_file_transfer_send_stream(param);
+}
+
+static inline esp_err_t esp_gmp_ft_abort(void)
+{
+    return esp_file_transfer_abort();
+}
+
+static inline esp_err_t esp_gmp_ft_get_status(esp_file_transfer_status_t *status)
+{
+    return esp_file_transfer_get_status(status);
+}
 
 #ifdef __cplusplus
 }

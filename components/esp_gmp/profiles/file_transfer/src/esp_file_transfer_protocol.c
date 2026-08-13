@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include "esp_file_transfer_protocol.h"
+#include "esp_gmp_ft_proto.h"
 
 #include <limits.h>
 #include <stdbool.h>
@@ -48,7 +48,7 @@ static void put_be64(uint8_t *p, uint64_t value)
 
 static bool reason_valid(uint16_t reason)
 {
-    return reason <= ESP_FT_REASON_INTERNAL_ERROR;
+    return reason <= ESP_FT_REASON_REJECTED_BY_APP;
 }
 
 static bool utf8_name_valid(const uint8_t *name, size_t len)

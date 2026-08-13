@@ -11,10 +11,6 @@
 #include "sdkconfig.h"
 #include <string.h>
 
-#if CONFIG_ESP_GMP_OTA_HOST
-#include "esp_gmp_ota_host.h"
-#endif
-
 static const char *TAG = "esp_gmp_os";
 
 /* OS profile group ID (from SPEC.md) */
@@ -48,7 +44,7 @@ esp_err_t esp_gmp_os_init(void)
     }
 
     /* Register packet handler with GMP core */
-    esp_err_t err = esp_gmp_register_handler(ESP_GMP_GRP_OS, os_packet_handler, NULL);
+    esp_err_t err = esp_gmp_register_handler(ESP_GMP_GRP_OS, os_packet_handler);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to register handler: %s", esp_err_to_name(err));
         return err;
@@ -66,8 +62,7 @@ void esp_gmp_os_deinit(void)
         return;
     }
 
-    /* Unregister packet handler */
-    esp_gmp_unregister_handler(ESP_GMP_GRP_OS);
+    esp_gmp_unregister_handler(ESP_GMP_GRP_OS, os_packet_handler);
 
     portENTER_CRITICAL(&s_cap_lock);
     s_capabilities = 0;
@@ -112,12 +107,10 @@ static bool os_packet_handler(const esp_gmp_rx_t *pkt)
         return false;
     }
 
-#if CONFIG_ESP_GMP_OTA_HOST
-    /* Forward OS_CAP_QUERY (and other) responses to OTA host waiters. */
+    /* Responses are for host-side waiters (co-registered GRP_OS handlers). */
     if (pkt->op == ESP_GMP_OP_WRITE_RSP || pkt->op == ESP_GMP_OP_READ_RSP) {
-        return esp_gmp_ota_host_on_rsp(pkt);
+        return false;
     }
-#endif
 
     /* CAP_QUERY uses READ_REQ/READ_RSP per SPEC; accept WRITE_REQ for host compat */
     if (pkt->op != ESP_GMP_OP_READ_REQ && pkt->op != ESP_GMP_OP_WRITE_REQ) {
@@ -127,22 +120,23 @@ static bool os_packet_handler(const esp_gmp_rx_t *pkt)
     switch (pkt->command_id) {
     case ESP_GMP_OS_CMD_CAP_QUERY:
         handle_cap_query(pkt);
-        return true;
+        /* Replies via esp_gmp_reply; do not take frame_buf ownership. */
+        return false;
 
     case ESP_GMP_OS_CMD_INFO_QUERY:
         /* TODO: Implement device info query */
         esp_gmp_reply(pkt, ESP_GMP_STATUS_NOT_SUPPORTED, NULL, 0);
-        return true;
+        return false;
 
     case ESP_GMP_OS_CMD_RESET:
         /* TODO: Implement device reset */
         esp_gmp_reply(pkt, ESP_GMP_STATUS_NOT_SUPPORTED, NULL, 0);
-        return true;
+        return false;
 
     default:
         /* Unknown command */
         esp_gmp_reply(pkt, ESP_GMP_STATUS_UNKNOWN_COMMAND, NULL, 0);
-        return true;
+        return false;
     }
 }
 

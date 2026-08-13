@@ -5,7 +5,7 @@
  */
 
 #include "esp_file_transfer_internal.h"
-#include "esp_file_transfer_protocol.h"
+#include "esp_gmp_ft_proto.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -41,7 +41,14 @@ esp_err_t ft_gmp_send(ft_instance_t *instance, uint8_t op, uint16_t sequence,
                       uint8_t command, uint8_t status, const uint8_t *payload,
                       size_t payload_len)
 {
-    if (!instance || !instance->gmp_link) {
+    if (!instance) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    esp_gmp_link_t link = instance->gmp_link;
+    if (instance->active_ctx && instance->active_ctx->link) {
+        link = instance->active_ctx->link;
+    }
+    if (!link) {
         return ESP_ERR_INVALID_STATE;
     }
     esp_gmp_tx_params_t tx = {
@@ -53,7 +60,7 @@ esp_err_t ft_gmp_send(ft_instance_t *instance, uint8_t op, uint16_t sequence,
         .flags = 0,
         .status = status,
     };
-    return esp_gmp_send(instance->gmp_link, &tx, payload, payload_len);
+    return esp_gmp_send(link, &tx, payload, payload_len);
 }
 
 esp_err_t ft_gmp_send_request(ft_instance_t *instance, ft_context_t *ctx, uint8_t command,
@@ -76,11 +83,19 @@ esp_err_t ft_gmp_send_request(ft_instance_t *instance, ft_context_t *ctx, uint8_
 esp_err_t ft_gmp_send_response(ft_instance_t *instance, const ft_gmp_packet_t *request,
                                uint8_t gmp_status, const uint8_t *payload, size_t payload_len)
 {
-    if (!instance || !request || request->op != ESP_GMP_OP_WRITE_REQ) {
+    if (!instance || !request || request->op != ESP_GMP_OP_WRITE_REQ || !request->link) {
         return ESP_ERR_INVALID_ARG;
     }
-    return ft_gmp_send(instance, ESP_GMP_OP_WRITE_RSP, request->sequence,
-                       request->command_id, gmp_status, payload, payload_len);
+    esp_gmp_tx_params_t tx = {
+        .ver = ESP_GMP_VER,
+        .op = ESP_GMP_OP_WRITE_RSP,
+        .group_id = ESP_GMP_GRP_FILE_TRANSFER,
+        .sequence = request->sequence,
+        .command_id = request->command_id,
+        .flags = 0,
+        .status = gmp_status,
+    };
+    return esp_gmp_send(request->link, &tx, payload, payload_len);
 }
 
 void ft_gmp_send_abort(ft_instance_t *instance, ft_context_t *ctx, uint16_t reason)
@@ -118,7 +133,8 @@ bool esp_file_transfer_on_packet(const esp_gmp_rx_t *pkt)
     if (!pkt || !ft_async_enter(instance)) {
         return false;
     }
-    if (pkt->link != instance->gmp_link || pkt->group_id != ESP_GMP_GRP_FILE_TRANSFER) {
+
+    if (pkt->group_id != ESP_GMP_GRP_FILE_TRANSFER) {
         ft_async_exit(instance);
         return false;
     }
@@ -187,19 +203,63 @@ bool esp_file_transfer_on_packet(const esp_gmp_rx_t *pkt)
     bool urgent = pkt->op == ESP_GMP_OP_WRITE_REQ &&
                   (pkt->command_id == ESP_FT_CMD_FINAL_CONFIRM ||
                    pkt->command_id == ESP_FT_CMD_ABORT);
-    BaseType_t queued = xQueueSend(instance->event_queue, &event, 0);
-    if (queued != pdTRUE && urgent) {
+
+    BaseType_t queued = pdFALSE;
+    if (urgent) {
         queued = xQueueSend(instance->urgent_queue, &event, 0);
+        if (queued != pdTRUE) {
+            queued = ft_event_queue_send(instance, &event, 0);
+        }
+        /* Prefer room by dropping only GMP/SEND work — never ABORT/DEINIT/TIMEOUT. */
+        if (queued != pdTRUE) {
+            ft_worker_event_t saved[ESP_FT_EVENT_QUEUE_LEN];
+            int saved_count = 0;
+            bool evicted = false;
+            ft_worker_event_t item;
+
+            ft_event_queue_lock(instance);
+            while (xQueueReceive(instance->event_queue, &item, 0) == pdTRUE) {
+                if (!evicted && (item.type == FT_WORK_GMP_PACKET ||
+                                 item.type == FT_WORK_SEND_CMD)) {
+                    ft_discard_worker_event(instance, &item, ESP_FT_ERR_QUEUE_FULL);
+                    evicted = true;
+                    ESP_LOGW(TAG, "evicted queued work for urgent cmd 0x%02x",
+                             pkt->command_id);
+                    continue;
+                }
+                if (saved_count < (int)ESP_FT_EVENT_QUEUE_LEN) {
+                    saved[saved_count++] = item;
+                } else {
+                    ft_discard_worker_event(instance, &item, ESP_FT_ERR_QUEUE_FULL);
+                }
+            }
+            for (int i = 0; i < saved_count; i++) {
+                if (xQueueSend(instance->event_queue, &saved[i], 0) != pdTRUE) {
+                    /* Should not happen under lock; complete waiters if it does. */
+                    ft_discard_worker_event(instance, &saved[i], ESP_FT_ERR_QUEUE_FULL);
+                }
+            }
+            queued = xQueueSend(instance->urgent_queue, &event, 0);
+            if (queued != pdTRUE) {
+                queued = xQueueSend(instance->event_queue, &event, 0);
+            }
+            ft_event_queue_unlock(instance);
+        }
+    } else {
+        queued = ft_event_queue_send(instance, &event, 0);
     }
+
     if (queued != pdTRUE) {
         free(event.data.packet.payload);
-        if (urgent) {
-            ESP_LOGW(TAG, "dropping urgent command 0x%02x: queues full",
-                     pkt->command_id);
-        } else if (pkt->op == ESP_GMP_OP_WRITE_REQ &&
-                   (pkt->command_id == ESP_FT_CMD_TRANSFER_META ||
-                    pkt->command_id == ESP_FT_CMD_DATA_BLOCK)) {
+        if (pkt->op == ESP_GMP_OP_WRITE_REQ &&
+                (pkt->command_id == ESP_FT_CMD_TRANSFER_META ||
+                 pkt->command_id == ESP_FT_CMD_DATA_BLOCK ||
+                 pkt->command_id == ESP_FT_CMD_FINAL_CONFIRM ||
+                 pkt->command_id == ESP_FT_CMD_ABORT)) {
             send_immediate_status(pkt, ESP_GMP_STATUS_BUSY);
+        }
+        if (urgent) {
+            ESP_LOGE(TAG, "failed to queue urgent command 0x%02x", pkt->command_id);
         }
         ft_async_exit(instance);
         return false;
@@ -215,10 +275,12 @@ void esp_file_transfer_on_link_down(esp_gmp_link_t link)
     if (!ft_async_enter(instance)) {
         return;
     }
-    if (link == instance->gmp_link) {
-        atomic_store(&instance->link_down_pending, true);
-        ft_worker_wake(instance);
-    }
+
+    /* Always defer to the worker. Never free sessions here — active_ctx may be
+     * temporarily switched to another link while handling a packet. */
+    ft_pending_link_down_push(instance, link);
+    ft_worker_wake(instance);
+
     ft_async_exit(instance);
 }
 
@@ -228,12 +290,31 @@ void esp_file_transfer_on_transport_error(esp_gmp_link_t link, esp_err_t error)
     if (!ft_async_enter(instance)) {
         return;
     }
-    if (link == instance->gmp_link) {
-        bool expected = false;
-        if (atomic_compare_exchange_strong(&instance->transport_error_pending, &expected, true)) {
-            atomic_store(&instance->transport_error, error);
+
+    /* Publish payload, then both pending flags under the same critical section. */
+    atomic_store(&instance->transport_error, error);
+    portENTER_CRITICAL(&instance->pending_link_lock);
+    bool found = false;
+    for (uint8_t i = 0; i < instance->pending_link_down_count; i++) {
+        if (instance->pending_link_downs[i] == link) {
+            found = true;
+            break;
         }
-        ft_worker_wake(instance);
     }
+    if (!found) {
+        if (instance->pending_link_down_count > 0) {
+            atomic_store(&instance->link_down_all_pending, true);
+        }
+        if (instance->pending_link_down_count < FT_MAX_SESSIONS) {
+            instance->pending_link_downs[instance->pending_link_down_count++] = link;
+        } else {
+            atomic_store(&instance->link_down_all_pending, true);
+        }
+    }
+    atomic_store(&instance->transport_error_pending, true);
+    atomic_store(&instance->link_down_pending, true);
+    portEXIT_CRITICAL(&instance->pending_link_lock);
+    ft_worker_wake(instance);
+
     ft_async_exit(instance);
 }

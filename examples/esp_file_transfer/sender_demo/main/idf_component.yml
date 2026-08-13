@@ -6,9 +6,6 @@ dependencies:
   esp_gmp:
     version: "*"
     override_path: "../../../../components/esp_gmp"
-  esp_file_transfer:
-    version: "*"
-    override_path: "../../../../components/esp_file_transfer"
   ble_session_manager:
     version: "*"
     path: "../../../esp_flux/common_components/ble_session_manager"

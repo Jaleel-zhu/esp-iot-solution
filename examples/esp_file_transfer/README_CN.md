@@ -2,18 +2,21 @@
 
 [English](README.md) | **中文**
 
-本示例使用两个独立工程演示 `esp_file_transfer` 在两块 ESP32-H4
-开发板之间的文件传输：
+本示例使用两个独立工程演示 `esp_gmp` File Transfer profile 在两块开发板
+之间的文件传输：
 
 - `sender_demo`：主动建立链路，用户通过 Console 决定何时发送文件。
 - `receiver_demo`：等待链路连接并被动接收文件。
 
-目录名表示默认演示方向，不限制组件能力。连接建立后，两端都初始化了相同的
-`esp_file_transfer` 组件并注册完整 Console，因此任意一端都可以发送文件。
+目录名表示默认演示方向，不限制组件能力。连接建立后，两端都启用
+`CONFIG_ESP_GMP_PROFILE_FILE_TRANSFER` 并注册完整 Console，因此任意一端都可以发送文件。
 
 示例集成层选择 BLE GATT 作为物理承载，并通过
 `esp_gmp -> GMP Flux adapter -> esp_flux` 建立可靠消息通道。
-`esp_file_transfer` 组件本身不依赖或访问 BLE/Flux。
+File Transfer profile 本身不依赖或访问 BLE/Flux。
+
+**范围说明：** 示例与 profile worker 按单链路验证。`sessions[]` 仅为预留结构，
+本版本不支持并发多链路文件传输。
 
 ## 构建
 
@@ -186,7 +189,7 @@ Cancel requested
 Transfer cancelled
 ```
 
-对端应结束当前传输并删除对应 `.ft_tmp/*.part`。完成清理后，两端执行
+对端应结束当前传输并删除对应 `ft_tmp/*.part`。完成清理后，两端执行
 `ft status` 均应回到 `Status: idle`。
 
 ### 断链恢复

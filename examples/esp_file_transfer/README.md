@@ -9,12 +9,16 @@ This example contains two independently buildable ESP32-H4 projects:
 - `receiver_demo` waits for the link and receives files passively.
 
 The names describe the default demonstration direction only. Both projects
-initialize the same bidirectional `esp_file_transfer` component and expose the
-same Console commands.
+initialize the same bidirectional File Transfer profile in `esp_gmp`
+(`CONFIG_ESP_GMP_PROFILE_FILE_TRANSFER`) and expose the same Console commands.
 
 The example integration layer uses BLE GATT with
-`esp_gmp -> GMP Flux adapter -> esp_flux`. The `esp_file_transfer` component
-itself remains independent of BLE and Flux.
+`esp_gmp -> GMP Flux adapter -> esp_flux`. The File Transfer profile itself
+remains independent of BLE and Flux.
+
+**Scope:** demos and the profile worker are validated for a single active BLE
+link. `sessions[]` is preparatory plumbing only — concurrent multi-link file
+transfer is not supported in this release.
 
 ## Build
 
@@ -177,7 +181,7 @@ Transfer cancelled
 ```
 
 The peer should terminate the transfer and remove the corresponding
-`.ft_tmp/*.part`. After cleanup, `ft status` should report `Status: idle` on
+`ft_tmp/*.part`. After cleanup, `ft status` should report `Status: idle` on
 both boards.
 
 ### Link-loss recovery

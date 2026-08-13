@@ -10,7 +10,7 @@
 
 #include "esp_console.h"
 #include "esp_err.h"
-#include "esp_file_transfer.h"
+#include "esp_gmp_ft.h"
 #include "esp_log.h"
 #include "sdkconfig.h"
 

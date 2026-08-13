@@ -41,7 +41,8 @@ static inline uint16_t esp_gmp_ota_chunk_for_flash(size_t max_gmp_payload)
         return 1;
     }
     size_t raw = max_gmp_payload - ESP_GMP_OTA_DATA_HDR_LEN;
-    return (uint16_t)((raw / ESP_GMP_OTA_FLASH_WRITE_ALIGN) * ESP_GMP_OTA_FLASH_WRITE_ALIGN);
+    uint16_t aligned = (uint16_t)((raw / ESP_GMP_OTA_FLASH_WRITE_ALIGN) * ESP_GMP_OTA_FLASH_WRITE_ALIGN);
+    return aligned > 0 ? aligned : (uint16_t)raw;
 }
 
 /** Round an existing chunk hint down to flash write alignment (minimum 1). */

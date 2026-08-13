@@ -92,13 +92,17 @@ static void finalize_receiver(ft_instance_t *instance)
     if (!ctx) {
         return;
     }
-    if (ft_process_pending_termination(instance)) {
+    if (ft_process_pending_termination(instance) && !instance->active_ctx) {
         return;
     }
+    ctx = instance->active_ctx;
+    if (!ctx) {
+        return;
+    }
+    ctx->state = TRANSFER_STATE_FINALIZING;
     if (ctx->file_size == 0 && !ctx->progress_reported) {
         receiver_progress(instance);
     }
-    ctx->state = TRANSFER_STATE_FINALIZING;
     ft_timer_disarm(instance);
     ft_snapshot_update(instance);
     ft_emit_event(instance, ESP_FT_EVENT_VERIFYING);
@@ -118,7 +122,7 @@ static void finalize_receiver(ft_instance_t *instance)
         }
         ctx->file = NULL;
     }
-    if (ft_process_pending_termination(instance)) {
+    if (ft_process_pending_termination(instance) && !instance->active_ctx) {
         return;
     }
     if (hash_err != ESP_OK) {
@@ -143,7 +147,7 @@ static void finalize_receiver(ft_instance_t *instance)
         return;
     }
 
-    if (ft_process_pending_termination(instance)) {
+    if (ft_process_pending_termination(instance) && !instance->active_ctx) {
         return;
     }
     esp_err_t err = ft_fs_commit_temp(instance->recv_dir, ctx->temp_path, ctx->file_name,
@@ -163,6 +167,11 @@ static void finalize_receiver(ft_instance_t *instance)
     err = send_final(instance, ctx, ESP_FT_WIRE_STATUS_OK, ESP_FT_REASON_OK);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "failed to send final success: %s", esp_err_to_name(err));
+        /* File is committed locally, but the peer never got FINAL — do not
+         * report COMPLETED. */
+        ft_finish_transfer(instance, ESP_FT_EVENT_FAILED,
+                           ESP_FT_REASON_DATA_SEND_FAILED, err);
+        return;
     }
     ft_finish_transfer(instance, ESP_FT_EVENT_COMPLETED, ESP_FT_REASON_OK, ESP_OK);
 }
@@ -202,7 +211,13 @@ void ft_receiver_handle_meta(ft_instance_t *instance, const ft_gmp_packet_t *pac
         }
         return;
     }
-    if (instance->active_ctx) {
+    /* handle_packet focuses sessions[i].ctx into active_ctx before calling us. */
+    if (!instance->active_ctx) {
+        reject_metadata(instance, packet, &metadata, ESP_FT_REASON_INTERNAL_ERROR,
+                        ESP_ERR_INVALID_STATE);
+        return;
+    }
+    if (instance->active_ctx->role != ESP_FILE_TRANSFER_ROLE_NONE) {
         reject_metadata(instance, packet, &metadata, ESP_FT_REASON_BUSY, ESP_FT_ERR_BUSY);
         return;
     }
@@ -222,10 +237,28 @@ void ft_receiver_handle_meta(ft_instance_t *instance, const ft_gmp_packet_t *pac
                         ESP_FT_ERR_FILE_TOO_LARGE);
         return;
     }
-    if (metadata.block_size > instance->block_size ||
-            metadata.block_size + ESP_FT_DATA_REQ_HDR_LEN > instance->effective_payload) {
+    /* Negotiate block size: accept min(proposed, local max, payload-derived max). */
+    uint32_t payload_max = 0;
+    if (instance->effective_payload > ESP_FT_DATA_REQ_HDR_LEN) {
+        payload_max = (uint32_t)(instance->effective_payload - ESP_FT_DATA_REQ_HDR_LEN);
+    }
+    uint32_t accepted_block_size = metadata.block_size;
+    if (accepted_block_size > instance->block_size) {
+        accepted_block_size = (uint32_t)instance->block_size;
+    }
+    if (accepted_block_size > payload_max) {
+        accepted_block_size = payload_max;
+    }
+    if (accepted_block_size == 0) {
         reject_metadata(instance, packet, &metadata, ESP_FT_REASON_CAPABILITY_MISMATCH,
                         ESP_FT_ERR_CAPABILITY_MISMATCH);
+        return;
+    }
+    uint64_t accepted_blocks = metadata.file_size == 0 ? 0 :
+                               1 + (metadata.file_size - 1) / accepted_block_size;
+    if (accepted_blocks > UINT32_MAX) {
+        reject_metadata(instance, packet, &metadata, ESP_FT_REASON_FILE_TOO_LARGE,
+                        ESP_FT_ERR_FILE_TOO_LARGE);
         return;
     }
     uint64_t free_bytes;
@@ -238,12 +271,16 @@ void ft_receiver_handle_meta(ft_instance_t *instance, const ft_gmp_packet_t *pac
         ESP_LOGW(TAG, "free-space query failed: %s", esp_err_to_name(err));
     }
 
-    ft_context_t *ctx = calloc(1, sizeof(*ctx));
-    if (!ctx) {
-        reject_metadata(instance, packet, &metadata, ESP_FT_REASON_INTERNAL_ERROR,
-                        ESP_ERR_NO_MEM);
+    if (instance->accept_cb &&
+            !instance->accept_cb(metadata.file_name, metadata.file_size, metadata.sha256,
+                                 instance->accept_ctx)) {
+        reject_metadata(instance, packet, &metadata, ESP_FT_REASON_REJECTED_BY_APP,
+                        ESP_ERR_INVALID_STATE);
         return;
     }
+
+    ft_context_t *ctx = instance->active_ctx;
+    memset(ctx, 0, sizeof(*ctx));
     err = ft_fs_create_temp(instance->recv_dir, metadata.transfer_id, metadata.file_name,
                             &ctx->temp_path, &ctx->file);
     if (err != ESP_OK) {
@@ -252,7 +289,7 @@ void ft_receiver_handle_meta(ft_instance_t *instance, const ft_gmp_packet_t *pac
         }
         ft_fs_remove(ctx->temp_path);
         free(ctx->temp_path);
-        free(ctx);
+        memset(ctx, 0, sizeof(*ctx));
         reject_metadata(instance, packet, &metadata,
                         err == ESP_ERR_NO_MEM ? ESP_FT_REASON_NO_SPACE :
                         ESP_FT_REASON_FILE_OPEN_FAILED, err);
@@ -263,7 +300,7 @@ void ft_receiver_handle_meta(ft_instance_t *instance, const ft_gmp_packet_t *pac
         fclose(ctx->file);
         ft_fs_remove(ctx->temp_path);
         free(ctx->temp_path);
-        free(ctx);
+        memset(ctx, 0, sizeof(*ctx));
         reject_metadata(instance, packet, &metadata,
                         err == ESP_ERR_NOT_SUPPORTED
                         ? ESP_FT_REASON_CAPABILITY_MISMATCH
@@ -274,11 +311,11 @@ void ft_receiver_handle_meta(ft_instance_t *instance, const ft_gmp_packet_t *pac
 
     ctx->role = ESP_FILE_TRANSFER_ROLE_RECEIVER;
     ctx->state = TRANSFER_STATE_WAIT_DATA_BLOCK;
-    ctx->link = instance->gmp_link;
+    ctx->link = packet->link ? packet->link : instance->gmp_link;
     ctx->transfer_id = metadata.transfer_id;
     ctx->file_size = metadata.file_size;
-    ctx->block_size = metadata.block_size;
-    ctx->total_blocks = metadata.total_blocks;
+    ctx->block_size = accepted_block_size;
+    ctx->total_blocks = (uint32_t)accepted_blocks;
     memcpy(ctx->expected_sha256, metadata.sha256, 32);
     strcpy(ctx->file_name, metadata.file_name);
     instance->active_ctx = ctx;
@@ -286,7 +323,7 @@ void ft_receiver_handle_meta(ft_instance_t *instance, const ft_gmp_packet_t *pac
     ft_emit_event(instance, ESP_FT_EVENT_META_RECEIVED);
 
     err = send_meta_response(instance, packet, ctx->transfer_id, ESP_FT_WIRE_STATUS_OK,
-                             ESP_FT_REASON_OK, ctx->block_size);
+                             ESP_FT_REASON_OK, accepted_block_size);
     if (err != ESP_OK) {
         receiver_fail(instance, ESP_FT_REASON_DATA_SEND_FAILED, err, false);
         return;

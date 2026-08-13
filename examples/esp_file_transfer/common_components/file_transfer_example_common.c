@@ -6,8 +6,9 @@
 
 #include <inttypes.h>
 
-#include "esp_file_transfer.h"
+#include "esp_gmp_ft.h"
 #include "esp_gmp_flux.h"
+#include "esp_gmp_os.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -84,30 +85,6 @@ static void on_file_transfer_event(const esp_file_transfer_event_t *event, void 
              event->reason_code);
 }
 
-static bool on_gmp_packet(void *ctx, const esp_gmp_rx_t *pkt)
-{
-    (void)ctx;
-
-    if (pkt->group_id == ESP_GMP_GRP_FILE_TRANSFER) {
-        return esp_file_transfer_on_packet(pkt);
-    }
-
-    if (pkt->op == ESP_GMP_OP_READ_REQ || pkt->op == ESP_GMP_OP_WRITE_REQ) {
-        esp_gmp_tx_params_t tx = {
-            .ver = ESP_GMP_VER,
-            .op = pkt->op == ESP_GMP_OP_READ_REQ
-            ? ESP_GMP_OP_READ_RSP : ESP_GMP_OP_WRITE_RSP,
-            .group_id = pkt->group_id,
-            .sequence = pkt->sequence,
-            .command_id = pkt->command_id,
-            .flags = 0,
-            .status = ESP_GMP_STATUS_UNKNOWN_COMMAND,
-        };
-        esp_gmp_send(pkt->link, &tx, NULL, 0);
-    }
-    return false;
-}
-
 static void on_session_complete(gatt_session_t *session, uint8_t stream_id,
                                 esp_err_t status, const uint8_t *data, uint32_t size)
 {
@@ -115,8 +92,8 @@ static void on_session_complete(gatt_session_t *session, uint8_t stream_id,
     (void)data;
     (void)size;
 
+    /* Transport errors are also notified via GMP link events to FT. */
     if (status != ESP_OK) {
-        esp_file_transfer_on_transport_error(session, status);
         ble_gap_terminate(session->conn_handle,
                           BLE_ERR_REM_USER_CONN_TERM);
     }
@@ -124,7 +101,7 @@ static void on_session_complete(gatt_session_t *session, uint8_t stream_id,
 
 static void on_session_error(gatt_session_t *session, esp_err_t error)
 {
-    esp_file_transfer_on_transport_error(session, error);
+    (void)error;
     ble_gap_terminate(session->conn_handle, BLE_ERR_REM_USER_CONN_TERM);
 }
 
@@ -162,7 +139,7 @@ esp_err_t file_transfer_example_init(void)
     }
 
     esp_gmp_init();
-    esp_gmp_on_packet_register(on_gmp_packet, NULL);
+    ESP_ERROR_CHECK(esp_gmp_os_init());
 
     err = file_transfer_example_console_init();
     if (err != ESP_OK) {
@@ -190,7 +167,8 @@ esp_err_t file_transfer_example_get_session_callbacks(
 
 esp_err_t file_transfer_example_link_up(gatt_session_t *session)
 {
-    if (!session || !session->flux_session) {
+    flux_session_t *flux = gatt_session_get_flux(session);
+    if (!session || !flux) {
         return ESP_ERR_INVALID_ARG;
     }
     if (!file_transfer_example_runtime_lock()) {
@@ -201,19 +179,29 @@ esp_err_t file_transfer_example_link_up(gatt_session_t *session)
         return ESP_FT_ERR_BUSY;
     }
 
-    esp_err_t err = esp_gmp_flux_link_register(session, session->flux_session);
-    if (err == ESP_OK) {
-        const esp_file_transfer_config_t config = {
-            .recv_dir = FILE_TRANSFER_EXAMPLE_RECV_DIR,
-            .gmp_link = session,
-            .max_file_size = FILE_TRANSFER_EXAMPLE_MAX_FILE_SIZE,
-            .block_size = 0,
-            .event_cb = on_file_transfer_event,
-            .event_ctx = NULL,
-        };
-        err = esp_file_transfer_init(&config);
-    }
+    esp_err_t err = esp_gmp_flux_link_register(session, flux);
     if (err != ESP_OK) {
+        ESP_LOGE(TAG, "flux_link_register failed: 0x%x (%s)",
+                 (unsigned)err, esp_err_to_name(err));
+        file_transfer_example_runtime_unlock();
+        return err;
+    }
+
+    size_t effective = esp_gmp_max_payload_effective(session);
+    ESP_LOGI(TAG, "link_up: mtu_eff_payload=%u", (unsigned)effective);
+
+    const esp_file_transfer_config_t config = {
+        .recv_dir = FILE_TRANSFER_EXAMPLE_RECV_DIR,
+        .gmp_link = session,
+        .max_file_size = FILE_TRANSFER_EXAMPLE_MAX_FILE_SIZE,
+        .block_size = 0,
+        .event_cb = on_file_transfer_event,
+        .event_ctx = NULL,
+    };
+    err = esp_file_transfer_init(&config);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_file_transfer_init failed: 0x%x (%s) payload=%u",
+                 (unsigned)err, esp_err_to_name(err), (unsigned)effective);
         esp_gmp_flux_link_unregister(session);
         file_transfer_example_runtime_unlock();
         return err;
@@ -233,16 +221,20 @@ void file_transfer_example_link_down(gatt_session_t *session)
     }
 
     if (s_file_transfer_ready && s_link == session) {
-        esp_file_transfer_on_link_down(session);
+        /* Unregister first so profiles see LINK_DOWN and abort cleanly. */
+        esp_gmp_flux_link_unregister(session);
         esp_err_t err = esp_file_transfer_deinit();
         if (err != ESP_OK) {
             ESP_LOGW(TAG, "File transfer deinit failed: %s",
                      esp_err_to_name(err));
+            /* Keep ready/link so a later retry can tear down cleanly. */
+        } else {
+            s_file_transfer_ready = false;
+            s_link = NULL;
         }
-        s_file_transfer_ready = false;
-        s_link = NULL;
+    } else {
+        esp_gmp_flux_link_unregister(session);
     }
-    esp_gmp_flux_link_unregister(session);
     file_transfer_example_runtime_unlock();
     ESP_LOGI(TAG, "File transfer link down");
 }

@@ -45,10 +45,9 @@ void esp_gmp_ota_host_on_link_event(esp_gmp_link_t link, esp_gmp_link_event_type
 /**
  * Consume GRP_OTA / GRP_OS response packets for an in-flight host transfer.
  *
- * When CONFIG_ESP_GMP_OTA_DEVICE is set, host does not register GRP_OTA (one
- * handler slot per group); the device handler must call this for READ_RSP /
- * WRITE_RSP. When CONFIG_ESP_GMP_PROFILE_OS is set, the OS handler must call
- * this for OS_CAP_QUERY READ_RSP so query_caps can complete.
+ * Host registers its own handlers for GRP_OTA and GRP_OS; GMP delivers each
+ * packet to every co-registered handler for that group. Callers may also invoke
+ * this directly when forwarding from another path.
  *
  * @return false (never takes frame_buf ownership).
  */

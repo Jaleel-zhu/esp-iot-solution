@@ -23,10 +23,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#if CONFIG_ESP_GMP_OTA_HOST
-#include "esp_gmp_ota_host.h"
-#endif
-
 #if CONFIG_ESP_GMP_PROFILE_OS
 #include "esp_gmp_os.h"
 #endif
@@ -742,10 +738,13 @@ static bool ota_worker_try_finish(ota_sess_t *s, RingbufHandle_t rb)
         ESP_LOGW(TAG, "send finish OK response failed: %s", esp_err_to_name(err));
     }
 
+    if (s_cfg.apply_policy == ESP_GMP_OTA_APPLY_MANUAL) {
+        s_manual_apply_pending = true;
+    }
+
     ota_emit(ESP_GMP_OTA_EVT_COMPLETED, s->image_size, s->image_size, 0, ESP_OK);
 
     if (s_cfg.apply_policy == ESP_GMP_OTA_APPLY_MANUAL) {
-        s_manual_apply_pending = true;
         ESP_LOGI(TAG, "OTA OK, waiting for esp_gmp_ota_apply()");
     } else {
         ESP_LOGI(TAG, "OTA OK, restart in %" PRIu32 " ms", delay_ms);
@@ -858,7 +857,8 @@ static esp_err_t ota_enqueue_data_chunk(ota_sess_t *s, uint32_t image_offset, ui
     return ESP_OK;
 }
 
-static esp_err_t handle_control(const esp_gmp_rx_t *pkt, ota_sess_t *s, ota_pending_rsp_t *rsp)
+static esp_err_t handle_control(const esp_gmp_rx_t *pkt, ota_sess_t *s, ota_pending_rsp_t *rsp,
+                                bool *emit_started, uint64_t *started_total)
 {
     esp_gmp_ota_ctrl_req_t req;
     if (!esp_gmp_ota_ctrl_parse_req(pkt->payload, pkt->payload_len, &req)) {
@@ -955,7 +955,12 @@ static esp_err_t handle_control(const esp_gmp_rx_t *pkt, ota_sess_t *s, ota_pend
         size_t n = esp_gmp_ota_ctrl_build_start_rsp(pl, sizeof(pl), &crsp);
         ESP_LOGI(TAG, "OTA START async worker rb=%u B (%u slots)",
                  (unsigned)ota_ringbuf_bytes(), (unsigned)CONFIG_ESP_GMP_OTA_RINGBUF_SLOTS);
-        ota_emit(ESP_GMP_OTA_EVT_STARTED, 0, req.image_size, 0, ESP_OK);
+        if (emit_started) {
+            *emit_started = true;
+        }
+        if (started_total) {
+            *started_total = req.image_size;
+        }
         return pending_write_rsp(rsp, pkt->link, pkt->sequence, pkt->command_id,
                                  ESP_GMP_STATUS_OK, pl, n);
     }
@@ -1436,7 +1441,7 @@ esp_err_t esp_gmp_ota_init(const esp_gmp_ota_config_t *cfg)
         }
     }
 
-    esp_err_t err = esp_gmp_register_handler(ESP_GMP_GRP_OTA, ota_device_handler, NULL);
+    esp_err_t err = esp_gmp_register_handler(ESP_GMP_GRP_OTA, ota_device_handler);
     if (err != ESP_OK) {
         ota_rx_teardown();
         return err;
@@ -1444,7 +1449,7 @@ esp_err_t esp_gmp_ota_init(const esp_gmp_ota_config_t *cfg)
 
     s_link_sub = esp_gmp_link_event_subscribe(ota_link_event_handler, NULL);
     if (!s_link_sub) {
-        esp_gmp_unregister_handler(ESP_GMP_GRP_OTA);
+        esp_gmp_unregister_handler(ESP_GMP_GRP_OTA, ota_device_handler);
         ota_rx_teardown();
         return ESP_ERR_NO_MEM;
     }
@@ -1469,7 +1474,7 @@ void esp_gmp_ota_deinit(void)
         s_link_sub = NULL;
     }
 
-    esp_gmp_unregister_handler(ESP_GMP_GRP_OTA);
+    esp_gmp_unregister_handler(ESP_GMP_GRP_OTA, ota_device_handler);
 
     s_inited = false;
 
@@ -1492,12 +1497,10 @@ bool esp_gmp_ota_on_packet(const esp_gmp_rx_t *pkt)
         return false;
     }
 
-#if CONFIG_ESP_GMP_OTA_HOST
-    /* One GRP_OTA handler slot: device owns REQ; forward RSP to host. */
+    /* Host co-registers for GRP_OTA RSPs; device only consumes requests. */
     if (pkt->op == ESP_GMP_OP_WRITE_RSP || pkt->op == ESP_GMP_OP_READ_RSP) {
-        return esp_gmp_ota_host_on_rsp(pkt);
+        return false;
     }
-#endif
 
     if (pkt->command_id == ESP_GMP_OTA_UPLOAD_DATA &&
             pkt->op == ESP_GMP_OP_WRITE_REQ) {
@@ -1549,6 +1552,8 @@ bool esp_gmp_ota_on_packet(const esp_gmp_rx_t *pkt)
 
     esp_err_t err = ESP_ERR_NOT_SUPPORTED;
     ota_pending_rsp_t rsp = { 0 };
+    bool emit_started = false;
+    uint64_t started_total = 0;
     if (s->closing) {
         if (pkt->op == ESP_GMP_OP_READ_REQ) {
             err = pending_read_rsp(&rsp, pkt->link, pkt->sequence, pkt->command_id,
@@ -1561,13 +1566,16 @@ bool esp_gmp_ota_on_packet(const esp_gmp_rx_t *pkt)
                pkt->op == ESP_GMP_OP_WRITE_REQ) {
         ESP_LOGI(TAG, "OTA CONTROL req seq=%u len=%u",
                  (unsigned)pkt->sequence, (unsigned)pkt->payload_len);
-        err = handle_control(pkt, s, &rsp);
+        err = handle_control(pkt, s, &rsp, &emit_started, &started_total);
     } else if (pkt->command_id == ESP_GMP_OTA_UPLOAD_QUERY &&
                pkt->op == ESP_GMP_OP_READ_REQ) {
         err = handle_query(pkt, s, &rsp);
     }
 
     xSemaphoreGive(s->lock);
+    if (emit_started) {
+        ota_emit(ESP_GMP_OTA_EVT_STARTED, 0, started_total, 0, ESP_OK);
+    }
     if (rsp.valid) {
         (void)pending_rsp_send(&rsp);
     }
@@ -1608,8 +1616,11 @@ void esp_gmp_ota_on_link_down(esp_gmp_link_t link)
 
 esp_err_t esp_gmp_ota_get_status(esp_gmp_link_t link, esp_gmp_ota_status_t *status)
 {
-    if (!status || !s_inited) {
+    if (!status) {
         return ESP_ERR_INVALID_ARG;
+    }
+    if (!s_inited) {
+        return ESP_ERR_INVALID_STATE;
     }
     memset(status, 0, sizeof(*status));
 
@@ -1638,6 +1649,9 @@ esp_err_t esp_gmp_ota_get_status(esp_gmp_link_t link, esp_gmp_ota_status_t *stat
     status->total = s->image_size;
     status->percent = status->total == 0 ? 0
                       : (uint8_t)((status->transferred * 100) / status->total);
+    if (status->percent > 100) {
+        status->percent = 100;
+    }
     xSemaphoreGive(s->lock);
     return ESP_OK;
 }

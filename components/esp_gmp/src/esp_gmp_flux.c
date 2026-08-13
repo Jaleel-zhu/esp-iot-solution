@@ -304,6 +304,19 @@ static void gmp_flux_gatt_error(gatt_session_t *session, esp_err_t error)
     }
 }
 
+static void gmp_flux_gatt_mtu_changed(gatt_session_t *session, uint16_t mtu)
+{
+    gmp_flux_hook_t *hook = hook_find((esp_gmp_link_t)session);
+    esp_gmp_link_t link = hook ? hook->link : (esp_gmp_link_t)session;
+
+    if (hook && hook->user_gatt_cbs.mtu_changed_cb) {
+        hook->user_gatt_cbs.mtu_changed_cb(session, mtu);
+    }
+    if (link) {
+        esp_gmp_notify_link_event(link, ESP_GMP_LINK_EVENT_MTU_CHANGED, ESP_OK);
+    }
+}
+
 esp_err_t esp_gmp_flux_get_gatt_callbacks(esp_gmp_link_t link, ble_session_callbacks_t *out, const ble_session_callbacks_t *user_cbs)
 {
     if (!out) {
@@ -326,6 +339,7 @@ esp_err_t esp_gmp_flux_get_gatt_callbacks(esp_gmp_link_t link, ble_session_callb
     out->data_received_cb = gmp_flux_gatt_data_received;
     out->progress_cb = gmp_flux_gatt_progress;
     out->error_cb = gmp_flux_gatt_error;
+    out->mtu_changed_cb = gmp_flux_gatt_mtu_changed;
     out->arg = NULL;
     return ESP_OK;
 }

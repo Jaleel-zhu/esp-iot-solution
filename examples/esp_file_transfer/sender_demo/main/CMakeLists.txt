@@ -17,7 +17,6 @@ idf_component_register(
         console
         fatfs
         wear_levelling
-        esp_file_transfer
         esp_gmp
         esp_flux
         ble_session_manager

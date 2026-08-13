@@ -22,7 +22,7 @@
 #include "services/gatt/ble_svc_gatt.h"
 
 #include "ble_manager.h"
-#include "esp_file_transfer.h"
+#include "esp_gmp_ft.h"
 #include "file_transfer_example_common.h"
 #include "flux_gatt_session.h"
 
@@ -31,6 +31,8 @@ static const char *TAG = "ft_receiver_demo";
 static ble_manager_t *s_manager;
 static gatt_session_t *s_session;
 static gatt_session_t *s_teardown_pending;
+static bool s_tearing_down;
+static bool s_adv_pending;
 static portMUX_TYPE s_session_lock = portMUX_INITIALIZER_UNLOCKED;
 static uint16_t s_rx_handle;
 static uint16_t s_tx_handle;
@@ -39,6 +41,8 @@ static const ble_uuid128_t s_service_uuid =
     FILE_TRANSFER_EXAMPLE_SERVICE_UUID;
 static const ble_uuid128_t s_rx_uuid = FILE_TRANSFER_EXAMPLE_RX_UUID;
 static const ble_uuid128_t s_tx_uuid = FILE_TRANSFER_EXAMPLE_TX_UUID;
+
+static void start_advertising(void);
 
 static void teardown_session(gatt_session_t *session)
 {
@@ -56,29 +60,37 @@ static void teardown_session(gatt_session_t *session)
 static void teardown_task(void *arg)
 {
     teardown_session((gatt_session_t *)arg);
+    portENTER_CRITICAL(&s_session_lock);
+    s_tearing_down = false;
+    s_adv_pending = true;
+    portEXIT_CRITICAL(&s_session_lock);
     vTaskDelete(NULL);
 }
 
 static void process_pending_teardown(void)
 {
     gatt_session_t *session;
+    bool start_adv = false;
     portENTER_CRITICAL(&s_session_lock);
     session = s_teardown_pending;
     s_teardown_pending = NULL;
     portEXIT_CRITICAL(&s_session_lock);
-    teardown_session(session);
-}
-
-static bool set_session_if_empty(gatt_session_t *session)
-{
-    bool stored = false;
+    if (session) {
+        teardown_session(session);
+        portENTER_CRITICAL(&s_session_lock);
+        s_tearing_down = false;
+        s_adv_pending = true;
+        portEXIT_CRITICAL(&s_session_lock);
+    }
     portENTER_CRITICAL(&s_session_lock);
-    if (!s_session) {
-        s_session = session;
-        stored = true;
+    if (s_adv_pending && !s_tearing_down && !s_teardown_pending && !s_session) {
+        s_adv_pending = false;
+        start_adv = true;
     }
     portEXIT_CRITICAL(&s_session_lock);
-    return stored;
+    if (start_adv) {
+        start_advertising();
+    }
 }
 
 static void start_advertising(void)
@@ -86,7 +98,10 @@ static void start_advertising(void)
     struct ble_hs_adv_fields fields = { 0 };
     struct ble_hs_adv_fields response = { 0 };
     struct ble_gap_adv_params params = { 0 };
-    const char *name = ble_svc_gap_device_name();
+    const char *name = FILE_TRANSFER_EXAMPLE_DEVICE_NAME;
+
+    /* Ensure GAP local name matches what the sender filters on. */
+    (void)ble_svc_gap_device_name_set(name);
 
     fields.flags = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
     fields.tx_pwr_lvl_is_present = 1;
@@ -117,6 +132,116 @@ static void start_advertising(void)
         ESP_LOGE(TAG, "Failed to start advertising: %s",
                  esp_err_to_name(err));
     }
+}
+
+static void activate_link_task(void *arg)
+{
+    (void)arg;
+    gatt_session_t *session;
+    uint16_t conn_handle;
+
+    portENTER_CRITICAL(&s_session_lock);
+    session = s_session;
+    portEXIT_CRITICAL(&s_session_lock);
+    if (!session) {
+        vTaskDelete(NULL);
+        return;
+    }
+    conn_handle = session->conn_handle;
+
+    const uint16_t need_mtu = 185; /* enough for META + Flux/GMP headers */
+    uint16_t mtu = BLE_ATT_MTU_DFLT;
+    esp_err_t err = ESP_FAIL;
+
+    for (int i = 0; i < 40; i++) {
+        bool alive = false;
+        portENTER_CRITICAL(&s_session_lock);
+        alive = (s_session == session && !session->was_disconnected &&
+                 !session->destroy_scheduled && !session->destroying);
+        portEXIT_CRITICAL(&s_session_lock);
+        if (!alive) {
+            vTaskDelete(NULL);
+            return;
+        }
+        if (ble_manager_get_mtu_by_conn(s_manager, conn_handle, &mtu) == ESP_OK &&
+                mtu >= need_mtu) {
+            break;
+        }
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+
+    if (mtu < need_mtu) {
+        ESP_LOGW(TAG, "MTU still low (%u); trying FT init anyway", (unsigned)mtu);
+    }
+
+    bool proceed = false;
+    portENTER_CRITICAL(&s_session_lock);
+    proceed = (s_session == session && !session->was_disconnected &&
+               !session->destroy_scheduled && !session->destroying);
+    portEXIT_CRITICAL(&s_session_lock);
+    if (!proceed) {
+        bool owned = false;
+        portENTER_CRITICAL(&s_session_lock);
+        if (s_session == session) {
+            s_session = NULL;
+            owned = true;
+            s_tearing_down = true;
+        }
+        portEXIT_CRITICAL(&s_session_lock);
+        if (owned) {
+            if (xTaskCreate(teardown_task, "ft_link_down", 4096,
+                            session, 4, NULL) != pdPASS) {
+                portENTER_CRITICAL(&s_session_lock);
+                s_teardown_pending = session;
+                portEXIT_CRITICAL(&s_session_lock);
+            }
+            ble_gap_terminate(conn_handle, BLE_ERR_REM_USER_CONN_TERM);
+        }
+        vTaskDelete(NULL);
+        return;
+    }
+
+    (void)gatt_session_set_mtu(session, mtu);
+
+    ble_session_callbacks_t callbacks;
+    err = file_transfer_example_get_session_callbacks(session, &callbacks);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "callbacks failed: 0x%x (%s)", (unsigned)err, esp_err_to_name(err));
+    } else {
+        session->callbacks = callbacks;
+        err = file_transfer_example_link_up(session);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "link_up failed: 0x%x (%s) mtu=%u",
+                     (unsigned)err, esp_err_to_name(err), (unsigned)mtu);
+        }
+    }
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to activate file transfer link: 0x%x (%s)",
+                 (unsigned)err, esp_err_to_name(err));
+        bool owned = false;
+        portENTER_CRITICAL(&s_session_lock);
+        if (s_session == session) {
+            s_session = NULL;
+            owned = true;
+            s_tearing_down = true;
+        }
+        portEXIT_CRITICAL(&s_session_lock);
+        if (owned) {
+            if (xTaskCreate(teardown_task, "ft_link_down", 4096,
+                            session, 4, NULL) != pdPASS) {
+                portENTER_CRITICAL(&s_session_lock);
+                s_teardown_pending = session;
+                portEXIT_CRITICAL(&s_session_lock);
+            }
+            ble_gap_terminate(conn_handle, BLE_ERR_REM_USER_CONN_TERM);
+        }
+        vTaskDelete(NULL);
+        return;
+    }
+
+    ESP_LOGI(TAG, "Receiver link ready, conn=%u, mtu=%u",
+             conn_handle, (unsigned)mtu);
+    vTaskDelete(NULL);
 }
 
 static void on_connect(ble_manager_t *manager, uint8_t type,
@@ -154,25 +279,35 @@ static void on_connect(ble_manager_t *manager, uint8_t type,
         return;
     }
 
-    ble_session_callbacks_t callbacks;
-    esp_err_t err = file_transfer_example_get_session_callbacks(
-                        session, &callbacks);
-    if (err == ESP_OK) {
-        session->callbacks = callbacks;
-        err = file_transfer_example_link_up(session);
-    }
-    if (err != ESP_OK || !set_session_if_empty(session)) {
-        ESP_LOGE(TAG, "Failed to activate file transfer link: %s",
-                 esp_err_to_name(err != ESP_OK ? err : ESP_FT_ERR_BUSY));
-        file_transfer_example_link_down(session);
+    portENTER_CRITICAL(&s_session_lock);
+    if (s_session || s_teardown_pending || s_tearing_down) {
+        portEXIT_CRITICAL(&s_session_lock);
+        ESP_LOGE(TAG, "session slot busy");
         gatt_session_schedule_destroy(session);
         ble_gap_terminate(connection->conn_handle,
                           BLE_ERR_REM_USER_CONN_TERM);
         return;
     }
+    s_session = session;
+    portEXIT_CRITICAL(&s_session_lock);
 
-    ESP_LOGI(TAG, "Receiver link ready, conn=%u, mtu=%u",
-             connection->conn_handle, mtu);
+    /* Defer FT init until ATT MTU exchange finishes (default 23 is too small). */
+    if (xTaskCreate(activate_link_task, "ft_rx_up", 4096, NULL, 5, NULL) != pdPASS) {
+        ESP_LOGE(TAG, "Failed to schedule link activation");
+        portENTER_CRITICAL(&s_session_lock);
+        if (s_session == session) {
+            s_session = NULL;
+        }
+        s_tearing_down = true;
+        portEXIT_CRITICAL(&s_session_lock);
+        if (xTaskCreate(teardown_task, "ft_link_down", 4096,
+                        session, 4, NULL) != pdPASS) {
+            portENTER_CRITICAL(&s_session_lock);
+            s_teardown_pending = session;
+            portEXIT_CRITICAL(&s_session_lock);
+        }
+        ble_gap_terminate(connection->conn_handle, BLE_ERR_REM_USER_CONN_TERM);
+    }
 }
 
 static void on_disconnect(ble_manager_t *manager,
@@ -190,6 +325,9 @@ static void on_disconnect(ble_manager_t *manager,
         session = s_session;
         s_session = NULL;
     }
+    if (session) {
+        s_tearing_down = true;
+    }
     portEXIT_CRITICAL(&s_session_lock);
 
     if (session &&
@@ -200,7 +338,7 @@ static void on_disconnect(ble_manager_t *manager,
         portEXIT_CRITICAL(&s_session_lock);
     }
     ESP_LOGI(TAG, "Disconnected, conn=%u", connection->conn_handle);
-    start_advertising();
+    /* Advertising restarts after teardown completes (see process_pending_teardown). */
 }
 
 static const struct ble_gatt_svc_def s_services[] = {
@@ -252,6 +390,12 @@ static void host_on_sync(void)
 {
     int rc = ble_hs_util_ensure_addr(0);
     assert(rc == 0);
+    /* Host reset clears advertising; re-arm so the receiver stays discoverable. */
+    portENTER_CRITICAL(&s_session_lock);
+    if (!s_session && !s_tearing_down && !s_teardown_pending) {
+        s_adv_pending = true;
+    }
+    portEXIT_CRITICAL(&s_session_lock);
 }
 
 static void configure_host(void)

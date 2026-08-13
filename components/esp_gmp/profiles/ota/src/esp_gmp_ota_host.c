@@ -10,7 +10,6 @@
 #include "esp_gmp.h"
 #include "esp_gmp_profile.h"
 #include "esp_log.h"
-#include "sdkconfig.h"
 
 #include <inttypes.h>
 #include <stdlib.h>
@@ -19,6 +18,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/portmacro.h"
 #include "freertos/semphr.h"
+#include "freertos/task.h"
 
 static const char *TAG = "esp_gmp_ota_host";
 
@@ -30,16 +30,12 @@ static const char *TAG = "esp_gmp_ota_host";
 #define GMP_RSP_TIMEOUT_MS 40000
 #define GMP_DATA_BUSY_MAX_RETRIES 5
 #define GMP_CTRL_BUSY_MAX_RETRIES 5
+#define GMP_TX_FULL_MAX_RETRIES 8
 
-static uint16_t s_host_seq;
-
-static uint16_t host_next_seq(void)
+static uint16_t host_next_seq(esp_gmp_link_t link)
 {
-    s_host_seq++;
-    if (s_host_seq == 0) {
-        s_host_seq = 1;
-    }
-    return s_host_seq;
+    uint16_t seq = esp_gmp_seq_next(link);
+    return seq ? seq : 1;
 }
 
 typedef struct {
@@ -103,14 +99,21 @@ static void emit_event(uint8_t event_id, uint64_t transferred, uint64_t total)
 
 static void pipe_reset(void)
 {
+    uint8_t *to_free[ESP_GMP_OTA_HOST_PIPE_DEPTH];
+    int n = 0;
+
     portENTER_CRITICAL(&s_pipe_lock);
     for (int i = 0; i < ESP_GMP_OTA_HOST_PIPE_DEPTH; i++) {
         if (s_pipe[i].payload) {
-            free(s_pipe[i].payload);
+            to_free[n++] = s_pipe[i].payload;
         }
     }
     memset(s_pipe, 0, sizeof(s_pipe));
     portEXIT_CRITICAL(&s_pipe_lock);
+
+    for (int i = 0; i < n; i++) {
+        free(to_free[i]);
+    }
     if (s_pipe_sem) {
         while (xSemaphoreTake(s_pipe_sem, 0) == pdTRUE) {
         }
@@ -159,12 +162,11 @@ static esp_err_t pipe_track(esp_gmp_link_t link, const esp_gmp_tx_params_t *tx, 
     return ESP_ERR_NO_MEM;
 }
 
-static void pipe_clear_slot_locked(int i)
+static uint8_t *pipe_detach_payload_locked(int i)
 {
-    if (s_pipe[i].payload) {
-        free(s_pipe[i].payload);
-    }
+    uint8_t *payload = s_pipe[i].payload;
     memset(&s_pipe[i], 0, sizeof(s_pipe[i]));
+    return payload;
 }
 
 static void pipe_on_response(uint16_t seq, uint8_t status)
@@ -213,14 +215,36 @@ static esp_err_t pipe_wait_one(uint8_t *out_status)
                     s_pipe[i].retries = retries;
                     portEXIT_CRITICAL(&s_pipe_lock);
                     vTaskDelay(pdMS_TO_TICKS(20U * retries));
-                    esp_err_t err = esp_gmp_send(link, &tx, payload, payload_len);
+                    esp_err_t err = ESP_FAIL;
+                    for (uint8_t tx_try = 0; tx_try <= GMP_TX_FULL_MAX_RETRIES; tx_try++) {
+                        err = esp_gmp_send(link, &tx, payload, payload_len);
+                        if (err == ESP_OK) {
+                            break;
+                        }
+                        if (err != ESP_ERR_ESP_GMP_TX_QUEUE_FULL && err != ESP_ERR_NO_MEM) {
+                            break;
+                        }
+                        esp_gmp_poll();
+                        vTaskDelay(pdMS_TO_TICKS(10U * (tx_try + 1U)));
+                    }
                     if (err != ESP_OK) {
+                        uint8_t *orphan = NULL;
+                        portENTER_CRITICAL(&s_pipe_lock);
+                        for (int j = 0; j < ESP_GMP_OTA_HOST_PIPE_DEPTH; j++) {
+                            if (s_pipe[j].active && s_pipe[j].seq == tx.sequence) {
+                                orphan = pipe_detach_payload_locked(j);
+                                break;
+                            }
+                        }
+                        portEXIT_CRITICAL(&s_pipe_lock);
+                        free(orphan);
                         return err;
                     }
                     continue;
                 }
-                pipe_clear_slot_locked(i);
+                uint8_t *done_payload = pipe_detach_payload_locked(i);
                 portEXIT_CRITICAL(&s_pipe_lock);
+                free(done_payload);
                 if (out_status) {
                     *out_status = status;
                 }
@@ -333,7 +357,20 @@ static esp_err_t gmp_send_and_wait(esp_gmp_link_t link, esp_gmp_tx_params_t *tx,
 {
     for (uint8_t retries = 0; retries <= GMP_CTRL_BUSY_MAX_RETRIES; retries++) {
         ctrl_wait_begin(tx->sequence);
-        esp_err_t err = esp_gmp_send(link, tx, pl, pl_len);
+
+        esp_err_t err = ESP_FAIL;
+        for (uint8_t tx_try = 0; tx_try <= GMP_TX_FULL_MAX_RETRIES; tx_try++) {
+            err = esp_gmp_send(link, tx, pl, pl_len);
+            if (err == ESP_OK) {
+                break;
+            }
+            if (err != ESP_ERR_ESP_GMP_TX_QUEUE_FULL && err != ESP_ERR_NO_MEM) {
+                ctrl_wait_cancel();
+                return err;
+            }
+            esp_gmp_poll();
+            vTaskDelay(pdMS_TO_TICKS(10U * (tx_try + 1U)));
+        }
         if (err != ESP_OK) {
             ctrl_wait_cancel();
             return err;
@@ -360,21 +397,30 @@ static esp_err_t gmp_send_data_pipelined(esp_gmp_link_t link, esp_gmp_tx_params_
         return err;
     }
 
-    err = esp_gmp_send(link, tx, pl, pl_len);
-    if (err != ESP_OK) {
-        portENTER_CRITICAL(&s_pipe_lock);
-        for (int i = 0; i < ESP_GMP_OTA_HOST_PIPE_DEPTH; i++) {
-            if (s_pipe[i].active && s_pipe[i].seq == tx->sequence) {
-                pipe_clear_slot_locked(i);
-                break;
-            }
+    for (uint8_t tx_try = 0; tx_try <= GMP_TX_FULL_MAX_RETRIES; tx_try++) {
+        err = esp_gmp_send(link, tx, pl, pl_len);
+        if (err == ESP_OK) {
+            esp_gmp_poll();
+            return ESP_OK;
         }
-        portEXIT_CRITICAL(&s_pipe_lock);
-        return err;
+        if (err != ESP_ERR_ESP_GMP_TX_QUEUE_FULL && err != ESP_ERR_NO_MEM) {
+            break;
+        }
+        esp_gmp_poll();
+        vTaskDelay(pdMS_TO_TICKS(10U * (tx_try + 1U)));
     }
 
-    esp_gmp_poll();
-    return ESP_OK;
+    portENTER_CRITICAL(&s_pipe_lock);
+    uint8_t *orphan = NULL;
+    for (int i = 0; i < ESP_GMP_OTA_HOST_PIPE_DEPTH; i++) {
+        if (s_pipe[i].active && s_pipe[i].seq == tx->sequence) {
+            orphan = pipe_detach_payload_locked(i);
+            break;
+        }
+    }
+    portEXIT_CRITICAL(&s_pipe_lock);
+    free(orphan);
+    return err;
 }
 
 static void send_abort_best_effort(esp_gmp_link_t link, uint16_t *seq, uint8_t session_id)
@@ -389,7 +435,7 @@ static void send_abort_best_effort(esp_gmp_link_t link, uint16_t *seq, uint8_t s
         return;
     }
 
-    *seq = host_next_seq();
+    *seq = host_next_seq(link);
     esp_gmp_tx_params_t tx = {
         .ver = ESP_GMP_VER,
         .op = ESP_GMP_OP_WRITE_REQ,
@@ -450,6 +496,8 @@ esp_err_t esp_gmp_ota_host_init(const esp_gmp_ota_host_config_t *cfg)
     if (!s_pipe_sem) {
         s_pipe_sem = xSemaphoreCreateCounting(ESP_GMP_OTA_HOST_PIPE_DEPTH, 0);
         if (!s_pipe_sem) {
+            vSemaphoreDelete(s_rsp_sem);
+            s_rsp_sem = NULL;
             return ESP_ERR_NO_MEM;
         }
     }
@@ -460,57 +508,49 @@ esp_err_t esp_gmp_ota_host_init(const esp_gmp_ota_host_config_t *cfg)
     s_registered_os = false;
 
     /*
-     * esp_gmp_register_handler allows one slot per group_id (later registration
-     * overwrites). When OTA device is also compiled in, device owns GRP_OTA and
-     * must forward RSP via esp_gmp_ota_host_on_rsp(). Host-only builds register
-     * here.
+     * Host always registers GRP_OTA and GRP_OS handlers. GMP fans out to all
+     * co-registered handlers for a group, so device/OS profiles remain
+     * independent and need not forward RSPs to the host.
      */
-#if !CONFIG_ESP_GMP_OTA_DEVICE
-    esp_err_t err = esp_gmp_register_handler(ESP_GMP_GRP_OTA, host_group_handler, NULL);
+    esp_err_t err = esp_gmp_register_handler(ESP_GMP_GRP_OTA, host_group_handler);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to register OTA handler: %s", esp_err_to_name(err));
-        return err;
+        goto fail_sem;
     }
     s_registered_ota = true;
-#endif
 
-    /*
-     * query_caps waits on OS_CAP_QUERY READ_RSP (GRP_OS). When OS profile is
-     * present it owns GRP_OS and must forward RSP to esp_gmp_ota_host_on_rsp().
-     * Otherwise host registers a RSP-only handler for GRP_OS.
-     */
-#if !CONFIG_ESP_GMP_PROFILE_OS
-    {
-        esp_err_t err = esp_gmp_register_handler(ESP_GMP_GRP_OS, host_group_handler, NULL);
-        if (err != ESP_OK) {
-            if (s_registered_ota) {
-                esp_gmp_unregister_handler(ESP_GMP_GRP_OTA);
-                s_registered_ota = false;
-            }
-            ESP_LOGE(TAG, "Failed to register OS RSP handler: %s", esp_err_to_name(err));
-            return err;
-        }
-        s_registered_os = true;
+    err = esp_gmp_register_handler(ESP_GMP_GRP_OS, host_group_handler);
+    if (err != ESP_OK) {
+        esp_gmp_unregister_handler(ESP_GMP_GRP_OTA, host_group_handler);
+        s_registered_ota = false;
+        ESP_LOGE(TAG, "Failed to register OS RSP handler: %s", esp_err_to_name(err));
+        goto fail_sem;
     }
-#endif
+    s_registered_os = true;
 
     s_link_sub = esp_gmp_link_event_subscribe(link_event_trampoline, NULL);
     if (!s_link_sub) {
-        if (s_registered_os) {
-            esp_gmp_unregister_handler(ESP_GMP_GRP_OS);
-            s_registered_os = false;
-        }
-        if (s_registered_ota) {
-            esp_gmp_unregister_handler(ESP_GMP_GRP_OTA);
-            s_registered_ota = false;
-        }
-        return ESP_ERR_NO_MEM;
+        esp_gmp_unregister_handler(ESP_GMP_GRP_OS, host_group_handler);
+        s_registered_os = false;
+        esp_gmp_unregister_handler(ESP_GMP_GRP_OTA, host_group_handler);
+        s_registered_ota = false;
+        goto fail_sem;
     }
 
     s_inited = true;
-    ESP_LOGI(TAG, "OTA host ready (pipe_depth=%d, own_ota=%d, own_os=%d)",
-             ESP_GMP_OTA_HOST_PIPE_DEPTH, (int)s_registered_ota, (int)s_registered_os);
+    ESP_LOGI(TAG, "OTA host ready (pipe_depth=%d)", ESP_GMP_OTA_HOST_PIPE_DEPTH);
     return ESP_OK;
+
+fail_sem:
+    if (s_pipe_sem) {
+        vSemaphoreDelete(s_pipe_sem);
+        s_pipe_sem = NULL;
+    }
+    if (s_rsp_sem) {
+        vSemaphoreDelete(s_rsp_sem);
+        s_rsp_sem = NULL;
+    }
+    return err == ESP_OK ? ESP_ERR_NO_MEM : err;
 }
 
 void esp_gmp_ota_host_deinit(void)
@@ -528,15 +568,23 @@ void esp_gmp_ota_host_deinit(void)
     }
 
     if (s_registered_os) {
-        esp_gmp_unregister_handler(ESP_GMP_GRP_OS);
+        esp_gmp_unregister_handler(ESP_GMP_GRP_OS, host_group_handler);
         s_registered_os = false;
     }
     if (s_registered_ota) {
-        esp_gmp_unregister_handler(ESP_GMP_GRP_OTA);
+        esp_gmp_unregister_handler(ESP_GMP_GRP_OTA, host_group_handler);
         s_registered_ota = false;
     }
 
     s_inited = false;
+    if (s_rsp_sem) {
+        vSemaphoreDelete(s_rsp_sem);
+        s_rsp_sem = NULL;
+    }
+    if (s_pipe_sem) {
+        vSemaphoreDelete(s_pipe_sem);
+        s_pipe_sem = NULL;
+    }
     memset(&s_cfg, 0, sizeof(s_cfg));
     ESP_LOGI(TAG, "OTA host deinitialized");
 }
@@ -567,7 +615,7 @@ esp_err_t esp_gmp_ota_host_query_caps(esp_gmp_link_t link, esp_gmp_ota_host_caps
         return ESP_ERR_INVALID_ARG;
     }
 
-    uint16_t seq = host_next_seq();
+    uint16_t seq = host_next_seq(link);
 
     esp_gmp_tx_params_t tx = {
         .ver = ESP_GMP_VER,
@@ -626,7 +674,7 @@ esp_err_t esp_gmp_ota_host_upload_stream(esp_gmp_link_t link, size_t image_len,
 
     emit_event(ESP_GMP_OTA_EVT_STARTED, 0, image_len);
 
-    uint16_t seq = host_next_seq();
+    uint16_t seq = host_next_seq(link);
     uint8_t start_pl[ESP_GMP_OTA_CTRL_START_LEN];
     esp_gmp_ota_ctrl_req_t start_req = {
         .action = ESP_GMP_OTA_CTRL_ACTION_START,
@@ -732,7 +780,7 @@ esp_err_t esp_gmp_ota_host_upload_stream(esp_gmp_link_t link, size_t image_len,
                                            ESP_ERR_INVALID_SIZE, send_offset, image_len);
             }
 
-            seq = host_next_seq();
+            seq = host_next_seq(link);
             tx.sequence = seq;
             tx.command_id = ESP_GMP_OTA_UPLOAD_DATA;
             err = gmp_send_data_pipelined(link, &tx, data_pl, data_n);
@@ -787,7 +835,7 @@ esp_err_t esp_gmp_ota_host_upload_stream(esp_gmp_link_t link, size_t image_len,
                                    ESP_ERR_INVALID_SIZE, image_len, image_len);
     }
 
-    seq = host_next_seq();
+    seq = host_next_seq(link);
     tx.sequence = seq;
     tx.command_id = ESP_GMP_OTA_UPLOAD_CONTROL;
     err = gmp_send_and_wait(link, &tx, finish_pl, finish_n);

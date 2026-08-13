@@ -113,6 +113,6 @@ idf_component_register(
 )
 ```
 
-OTA (direct write to the OTA partition): see [`ota/README.md`](ota/README.md) / [`ota/README_CN.md`](ota/README_CN.md).
+OTA (direct write to the OTA partition): see [`profiles/ota/README.md`](profiles/ota/README.md) / [`profiles/ota/README_CN.md`](profiles/ota/README_CN.md).
 
 BLE OTA examples: [`examples/esp_gmp/gmp_ota`](../../examples/esp_gmp/gmp_ota).

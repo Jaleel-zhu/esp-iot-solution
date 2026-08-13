@@ -52,6 +52,7 @@ typedef enum {
     ESP_FT_REASON_HASH_MISMATCH = 0x000d,
     ESP_FT_REASON_ABORTED = 0x000e,
     ESP_FT_REASON_INTERNAL_ERROR = 0x000f,
+    ESP_FT_REASON_REJECTED_BY_APP = 0x0010,
 } esp_ft_reason_code_t;
 
 typedef struct {

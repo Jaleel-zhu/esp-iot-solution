@@ -120,27 +120,30 @@ typedef bool (*esp_gmp_packet_handler_fn)(const esp_gmp_rx_t *pkt);
 /**
  * @brief Register a packet handler for a specific group ID.
  *
- * Profiles (OTA, FT, OS, etc.) register their handlers during init.
- * This replaces the centralized fan-out switch-case in esp_gmp core.
+ * Multiple handlers may share the same group_id; each matching RX packet is
+ * delivered to every registered handler until one returns true (takes frame
+ * ownership). Profiles stay independent (e.g. OS device + OTA host both on
+ * GRP_OS).
  *
  * @param group_id GMP group ID to handle (e.g., ESP_GMP_GRP_OTA)
  * @param handler Handler function to invoke for matching packets
- * @param ctx User context passed to handler (reserved for future use)
  * @return ESP_OK on success, ESP_ERR_NO_MEM if handler table is full
  */
 esp_err_t esp_gmp_register_handler(uint8_t group_id,
-                                   esp_gmp_packet_handler_fn handler,
-                                   void *ctx);
+                                   esp_gmp_packet_handler_fn handler);
 
 /**
- * @brief Unregister a packet handler for a specific group ID.
+ * @brief Unregister a packet handler previously registered for @p group_id.
  *
- * Profiles should call this during deinit to clean up.
+ * Matches both group_id and handler function so co-registered profiles on the
+ * same group do not unregister each other.
  *
- * @param group_id GMP group ID to unregister
+ * @param group_id GMP group ID
+ * @param handler Handler function to remove
  * @return ESP_OK on success, ESP_ERR_NOT_FOUND if not registered
  */
-esp_err_t esp_gmp_unregister_handler(uint8_t group_id);
+esp_err_t esp_gmp_unregister_handler(uint8_t group_id,
+                                     esp_gmp_packet_handler_fn handler);
 
 /**
  * @brief Link event types for subscription.

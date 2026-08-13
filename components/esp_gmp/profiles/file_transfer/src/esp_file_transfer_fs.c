@@ -13,10 +13,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
-#include <sys/statvfs.h>
 #include <unistd.h>
 
 #include "esp_log.h"
+#include "esp_vfs_fat.h"
 
 static const char *TAG = "esp_file_transfer";
 
@@ -121,16 +121,20 @@ esp_err_t ft_fs_prepare(const char *recv_dir)
     }
     struct stat info;
     if (stat(recv_dir, &info) != 0 || !S_ISDIR(info.st_mode) || access(recv_dir, W_OK) != 0) {
+        ESP_LOGE(TAG, "recv_dir not writable: %s errno=%d", recv_dir, errno);
         return ESP_FT_ERR_OPEN_FAILED;
     }
-    char *temp_dir = join_path(recv_dir, ".ft_tmp");
+    /* Use an 8.3-safe name: FAT without LFN rejects leading-dot directories. */
+    char *temp_dir = join_path(recv_dir, "ft_tmp");
     if (!temp_dir) {
         return ESP_ERR_NO_MEM;
     }
     esp_err_t result = ESP_OK;
     if (mkdir(temp_dir, 0700) != 0 && errno != EEXIST) {
+        ESP_LOGE(TAG, "mkdir %s failed: errno=%d", temp_dir, errno);
         result = ESP_FT_ERR_OPEN_FAILED;
     } else if (stat(temp_dir, &info) != 0 || !S_ISDIR(info.st_mode)) {
+        ESP_LOGE(TAG, "temp dir not usable: %s errno=%d", temp_dir, errno);
         result = ESP_FT_ERR_OPEN_FAILED;
     }
     free(temp_dir);
@@ -139,7 +143,7 @@ esp_err_t ft_fs_prepare(const char *recv_dir)
 
 void ft_fs_cleanup_parts(const char *recv_dir)
 {
-    char *temp_dir = join_path(recv_dir, ".ft_tmp");
+    char *temp_dir = join_path(recv_dir, "ft_tmp");
     if (!temp_dir) {
         return;
     }
@@ -200,7 +204,7 @@ esp_err_t ft_fs_create_temp(const char *recv_dir, uint32_t transfer_id, const ch
     if (!recv_dir || transfer_id == 0 || !ft_fs_name_valid(file_name) || !temp_path || !file) {
         return ESP_ERR_INVALID_ARG;
     }
-    char *temp_dir = join_path(recv_dir, ".ft_tmp");
+    char *temp_dir = join_path(recv_dir, "ft_tmp");
     if (!temp_dir) {
         return ESP_ERR_NO_MEM;
     }
@@ -240,16 +244,41 @@ esp_err_t ft_fs_get_free_bytes(const char *recv_dir, uint64_t *free_bytes)
     if (!recv_dir || !free_bytes) {
         return ESP_ERR_INVALID_ARG;
     }
-    struct statvfs info;
-    if (statvfs(recv_dir, &info) != 0) {
-        return errno == ENOSYS ? ESP_ERR_NOT_SUPPORTED : ESP_FAIL;
+    /*
+     * esp_vfs_fat_info() expects the FAT mount point, not a subdirectory.
+     * Walk parents from recv_dir until a query succeeds (e.g. /fatfs/recv → /fatfs).
+     */
+    char path[256];
+    size_t len = strnlen(recv_dir, sizeof(path));
+    if (len == 0 || len >= sizeof(path)) {
+        return ESP_ERR_INVALID_ARG;
     }
-    if (info.f_frsize != 0 && info.f_bavail > UINT64_MAX / info.f_frsize) {
-        *free_bytes = UINT64_MAX;
-    } else {
-        *free_bytes = (uint64_t)info.f_bavail * info.f_frsize;
+    memcpy(path, recv_dir, len + 1);
+
+    uint64_t total_bytes = 0;
+    esp_err_t err = ESP_ERR_NOT_FOUND;
+    for (;;) {
+        err = esp_vfs_fat_info(path, &total_bytes, free_bytes);
+        if (err == ESP_OK) {
+            return ESP_OK;
+        }
+        /* Strip trailing slash then last component. */
+        while (len > 1 && path[len - 1] == '/') {
+            path[--len] = '\0';
+        }
+        if (len <= 1) {
+            break;
+        }
+        char *slash = strrchr(path, '/');
+        if (!slash || slash == path) {
+            path[1] = '\0';
+            len = 1;
+            continue;
+        }
+        *slash = '\0';
+        len = (size_t)(slash - path);
     }
-    return ESP_OK;
+    return err == ESP_ERR_INVALID_STATE ? ESP_ERR_NOT_SUPPORTED : err;
 }
 
 static esp_err_t make_candidate(const char *file_name, uint64_t suffix,

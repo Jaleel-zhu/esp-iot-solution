@@ -391,13 +391,13 @@ is draining.
 - `components/esp_gmp/src/esp_gmp_frame.c` is the source of truth for the v1
   GMP frame layout.
 - `components/esp_gmp/include/esp_gmp_types.h` defines public constants.
-- `components/esp_gmp/ota/include/esp_gmp_ota_proto.h` defines OTA payload
+- `components/esp_gmp/profiles/ota/include/esp_gmp_ota_proto.h` defines OTA payload
   sizes and field meanings.
 - GMP core owns TX frame buffers allocated by `esp_gmp_send()`. An asynchronous
   transport must call `esp_gmp_transport_tx_done()` with the same data pointer
   it received in `send()`. Synchronous-copy transports must also arrange this
   notification after `send()` has returned.
 - GMP core does not parse OTA payloads. OTA semantics live in
-  `components/esp_gmp/ota`.
+  `components/esp_gmp/profiles/ota` (SHA-256 helpers in `common/`).
 - OTA SHA256 verifies transfer integrity only. ESP-GMP does not define firmware
   authenticity, image signing, BLE authorization, or secure boot policy.

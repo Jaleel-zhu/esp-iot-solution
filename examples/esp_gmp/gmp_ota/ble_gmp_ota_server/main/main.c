@@ -41,6 +41,7 @@ static const char *TAG = "gmp_ota_srv";
 static ble_manager_t *g_ble_manager;
 static gatt_session_t *g_sessions[MAX_CONNECTIONS];
 static gatt_session_t *g_teardown_pending[MAX_CONNECTIONS];
+static portMUX_TYPE g_sessions_lock = portMUX_INITIALIZER_UNLOCKED;
 static portMUX_TYPE g_teardown_lock = portMUX_INITIALIZER_UNLOCKED;
 static uint16_t g_chr_rx_handle;
 static uint16_t g_chr_tx_handle;
@@ -57,6 +58,33 @@ static int find_session_idx(uint16_t conn_handle)
         }
     }
     return -1;
+}
+
+static void clear_session_slot(gatt_session_t *session)
+{
+    portENTER_CRITICAL(&g_sessions_lock);
+    for (int i = 0; i < MAX_CONNECTIONS; i++) {
+        if (g_sessions[i] == session) {
+            g_sessions[i] = NULL;
+            break;
+        }
+    }
+    portEXIT_CRITICAL(&g_sessions_lock);
+}
+
+static bool session_slot_active(gatt_session_t *session)
+{
+    bool active = false;
+
+    portENTER_CRITICAL(&g_sessions_lock);
+    for (int i = 0; i < MAX_CONNECTIONS; i++) {
+        if (g_sessions[i] == session) {
+            active = !session->was_disconnected;
+            break;
+        }
+    }
+    portEXIT_CRITICAL(&g_sessions_lock);
+    return active;
 }
 
 static esp_err_t setup_gmp_callbacks(gatt_session_t *session)
@@ -144,9 +172,35 @@ static void activate_session_task(void *arg)
     gatt_session_t *session = (gatt_session_t *)arg;
     const uint16_t need_mtu = 185;
     uint16_t mtu = BLE_ATT_MTU_DFLT;
+    uint16_t conn_handle;
+
+    if (!session) {
+        vTaskDelete(NULL);
+        return;
+    }
+    conn_handle = session->conn_handle;
 
     for (int i = 0; i < 40; i++) {
-        if (ble_manager_get_mtu_by_conn(g_ble_manager, session->conn_handle, &mtu) == ESP_OK &&
+        if (!session_slot_active(session) || session->was_disconnected ||
+                session->destroy_scheduled || session->destroying) {
+            bool owned = false;
+            portENTER_CRITICAL(&g_sessions_lock);
+            for (int j = 0; j < MAX_CONNECTIONS; j++) {
+                if (g_sessions[j] == session) {
+                    g_sessions[j] = NULL;
+                    owned = true;
+                    break;
+                }
+            }
+            portEXIT_CRITICAL(&g_sessions_lock);
+            if (owned) {
+                gatt_session_schedule_destroy(session);
+                ble_gap_terminate(conn_handle, BLE_ERR_REM_USER_CONN_TERM);
+            }
+            vTaskDelete(NULL);
+            return;
+        }
+        if (ble_manager_get_mtu_by_conn(g_ble_manager, conn_handle, &mtu) == ESP_OK &&
                 mtu >= need_mtu) {
             break;
         }
@@ -158,40 +212,129 @@ static void activate_session_task(void *arg)
     if (mtu < BLE_ATT_MTU_DFLT) {
         mtu = BLE_ATT_MTU_DFLT;
     }
-    (void)gatt_session_set_mtu(session, mtu);
 
-    if (setup_gmp_callbacks(session) != ESP_OK) {
-        ESP_LOGE(TAG, "setup GMP callbacks failed");
-        gatt_session_schedule_destroy(session);
-        ble_gap_terminate(session->conn_handle, BLE_ERR_REM_USER_CONN_TERM);
+    if (!session_slot_active(session) || session->was_disconnected ||
+            session->destroy_scheduled || session->destroying) {
+        bool owned = false;
+        portENTER_CRITICAL(&g_sessions_lock);
+        for (int i = 0; i < MAX_CONNECTIONS; i++) {
+            if (g_sessions[i] == session) {
+                g_sessions[i] = NULL;
+                owned = true;
+                break;
+            }
+        }
+        portEXIT_CRITICAL(&g_sessions_lock);
+        if (owned) {
+            gatt_session_schedule_destroy(session);
+            ble_gap_terminate(conn_handle, BLE_ERR_REM_USER_CONN_TERM);
+        }
         vTaskDelete(NULL);
         return;
     }
 
-    bool stored = false;
-    for (int i = 0; i < MAX_CONNECTIONS; i++) {
-        if (!g_sessions[i]) {
-            g_sessions[i] = session;
-            esp_err_t err = setup_gmp_session(session);
-            if (err != ESP_OK) {
-                ESP_LOGE(TAG, "GMP Flux registration failed: %s", esp_err_to_name(err));
+    (void)gatt_session_set_mtu(session, mtu);
+
+    if (!session_slot_active(session) || session->was_disconnected ||
+            session->destroy_scheduled || session->destroying) {
+        bool owned = false;
+        portENTER_CRITICAL(&g_sessions_lock);
+        for (int i = 0; i < MAX_CONNECTIONS; i++) {
+            if (g_sessions[i] == session) {
                 g_sessions[i] = NULL;
-                gatt_session_schedule_destroy(session);
-                ble_gap_terminate(session->conn_handle, BLE_ERR_REM_USER_CONN_TERM);
-                vTaskDelete(NULL);
-                return;
+                owned = true;
+                break;
             }
-            stored = true;
-            ESP_LOGI(TAG, "GMP session ready conn=%d mtu=%u", session->conn_handle, (unsigned)mtu);
-            break;
         }
+        portEXIT_CRITICAL(&g_sessions_lock);
+        if (owned) {
+            gatt_session_schedule_destroy(session);
+            ble_gap_terminate(conn_handle, BLE_ERR_REM_USER_CONN_TERM);
+        }
+        vTaskDelete(NULL);
+        return;
     }
-    if (!stored) {
-        ESP_LOGW(TAG, "max connections (%d) reached, rejecting conn=%d",
-                 MAX_CONNECTIONS, session->conn_handle);
-        gatt_session_schedule_destroy(session);
-        ble_gap_terminate(session->conn_handle, BLE_ERR_REM_USER_CONN_TERM);
+
+    if (setup_gmp_callbacks(session) != ESP_OK) {
+        ESP_LOGE(TAG, "setup GMP callbacks failed");
+        clear_session_slot(session);
+        if (gatt_session_schedule_destroy(session) != ESP_OK) {
+            ESP_LOGE(TAG, "schedule_destroy failed; reinsert for disconnect cleanup");
+            /* Prefer leaking until disconnect over destroying off host task. */
+            portENTER_CRITICAL(&g_sessions_lock);
+            for (int i = 0; i < MAX_CONNECTIONS; i++) {
+                if (g_sessions[i] == NULL) {
+                    g_sessions[i] = session;
+                    break;
+                }
+            }
+            portEXIT_CRITICAL(&g_sessions_lock);
+        }
+        ble_gap_terminate(conn_handle, BLE_ERR_REM_USER_CONN_TERM);
+        vTaskDelete(NULL);
+        return;
     }
+
+    if (!session_slot_active(session) || session->was_disconnected ||
+            session->destroy_scheduled || session->destroying) {
+        clear_session_slot(session);
+        if (gatt_session_schedule_destroy(session) != ESP_OK) {
+            ESP_LOGE(TAG, "schedule_destroy failed after disconnect race");
+            portENTER_CRITICAL(&g_sessions_lock);
+            for (int i = 0; i < MAX_CONNECTIONS; i++) {
+                if (g_sessions[i] == NULL) {
+                    g_sessions[i] = session;
+                    break;
+                }
+            }
+            portEXIT_CRITICAL(&g_sessions_lock);
+        }
+        ble_gap_terminate(conn_handle, BLE_ERR_REM_USER_CONN_TERM);
+        vTaskDelete(NULL);
+        return;
+    }
+
+    esp_err_t err = setup_gmp_session(session);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "GMP Flux registration failed: %s", esp_err_to_name(err));
+        clear_session_slot(session);
+        if (gatt_session_schedule_destroy(session) != ESP_OK) {
+            ESP_LOGE(TAG, "schedule_destroy failed after setup_gmp_session");
+            portENTER_CRITICAL(&g_sessions_lock);
+            for (int i = 0; i < MAX_CONNECTIONS; i++) {
+                if (g_sessions[i] == NULL) {
+                    g_sessions[i] = session;
+                    break;
+                }
+            }
+            portEXIT_CRITICAL(&g_sessions_lock);
+        }
+        ble_gap_terminate(conn_handle, BLE_ERR_REM_USER_CONN_TERM);
+        vTaskDelete(NULL);
+        return;
+    }
+
+    if (!session_slot_active(session) || session->was_disconnected ||
+            session->destroy_scheduled || session->destroying) {
+        clear_session_slot(session);
+        (void)esp_gmp_flux_link_unregister(session);
+        if (gatt_session_schedule_destroy(session) != ESP_OK) {
+            ESP_LOGE(TAG, "schedule_destroy failed after late disconnect");
+            portENTER_CRITICAL(&g_sessions_lock);
+            for (int i = 0; i < MAX_CONNECTIONS; i++) {
+                if (g_sessions[i] == NULL) {
+                    g_sessions[i] = session;
+                    break;
+                }
+            }
+            portEXIT_CRITICAL(&g_sessions_lock);
+        }
+        ble_gap_terminate(conn_handle, BLE_ERR_REM_USER_CONN_TERM);
+        vTaskDelete(NULL);
+        return;
+    }
+
+    ESP_LOGI(TAG, "GMP session ready conn=%d mtu=%u", conn_handle, (unsigned)mtu);
     vTaskDelete(NULL);
 }
 
@@ -224,9 +367,28 @@ static void ble_manager_connect_cb(ble_manager_t *manager, uint8_t type, ble_con
         return;
     }
 
+    int slot = -1;
+    portENTER_CRITICAL(&g_sessions_lock);
+    for (int i = 0; i < MAX_CONNECTIONS; i++) {
+        if (!g_sessions[i]) {
+            g_sessions[i] = session;
+            slot = i;
+            break;
+        }
+    }
+    portEXIT_CRITICAL(&g_sessions_lock);
+    if (slot < 0) {
+        ESP_LOGW(TAG, "max connections (%d) reached, rejecting conn=%d",
+                 MAX_CONNECTIONS, conn->conn_handle);
+        gatt_session_schedule_destroy(session);
+        ble_gap_terminate(conn->conn_handle, BLE_ERR_REM_USER_CONN_TERM);
+        return;
+    }
+
     /* Defer GMP register until ATT MTU exchange finishes (default/0 is too small). */
     if (xTaskCreate(activate_session_task, "gmp_srv_up", 4096, session, 5, NULL) != pdPASS) {
         ESP_LOGE(TAG, "Failed to schedule session activation");
+        clear_session_slot(session);
         gatt_session_schedule_destroy(session);
         ble_gap_terminate(conn->conn_handle, BLE_ERR_REM_USER_CONN_TERM);
     }
@@ -238,13 +400,18 @@ static void ble_manager_disconnect_cb(ble_manager_t *manager, ble_connection_t *
     (void)status;
     (void)arg;
 
+    gatt_session_t *session = NULL;
+
+    portENTER_CRITICAL(&g_sessions_lock);
     int idx = find_session_idx(conn->conn_handle);
-    if (idx < 0) {
+    if (idx >= 0) {
+        session = g_sessions[idx];
+        g_sessions[idx] = NULL;
+    }
+    portEXIT_CRITICAL(&g_sessions_lock);
+    if (!session) {
         return;
     }
-
-    gatt_session_t *session = g_sessions[idx];
-    g_sessions[idx] = NULL;
     if (xTaskCreate(teardown_session_task, "gmp_srv_teardown", 4096, session, 4, NULL) != pdPASS &&
             !teardown_pending_push(session)) {
         ESP_LOGE(TAG, "failed to schedule teardown for conn=%d", conn->conn_handle);

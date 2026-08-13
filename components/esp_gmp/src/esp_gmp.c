@@ -49,6 +49,44 @@ static esp_gmp_on_packet_fn s_cb;
 static void *s_cb_ctx;
 static bool s_inited;
 
+/* Handler table (Phase 2: replaces centralized fan-out) */
+#ifndef CONFIG_ESP_GMP_MAX_HANDLERS
+#define CONFIG_ESP_GMP_MAX_HANDLERS 8
+#endif
+
+typedef struct {
+    bool active;
+    uint8_t group_id;
+    esp_gmp_packet_handler_fn handler;
+    void *ctx;
+} handler_entry_t;
+
+static handler_entry_t s_handlers[CONFIG_ESP_GMP_MAX_HANDLERS];
+static SemaphoreHandle_t s_handlers_mutex;
+
+/* Link event subscribers (Phase 2: replaces single-slot callback) */
+#ifndef CONFIG_ESP_GMP_MAX_LINK_EVENT_SUBSCRIBERS
+#define CONFIG_ESP_GMP_MAX_LINK_EVENT_SUBSCRIBERS 8
+#endif
+
+struct esp_gmp_link_event_sub {
+    bool active;
+    esp_gmp_link_event_fn fn;
+    void *ctx;
+};
+
+static struct esp_gmp_link_event_sub s_link_subs[CONFIG_ESP_GMP_MAX_LINK_EVENT_SUBSCRIBERS];
+static SemaphoreHandle_t s_link_subs_mutex;
+
+/* Per-link sequence allocation (Phase 2: avoid multi-profile conflicts) */
+typedef struct {
+    esp_gmp_link_t link;
+    uint16_t next_seq;
+    portMUX_TYPE lock;
+} link_seq_state_t;
+
+static link_seq_state_t s_link_seqs[CONFIG_ESP_GMP_MAX_LINKS];
+
 static bool is_req_op(uint8_t op)
 {
     return op == ESP_GMP_OP_READ_REQ || op == ESP_GMP_OP_WRITE_REQ;
@@ -188,6 +226,17 @@ static bool in_flight_any(const link_entry_t *L)
     return false;
 }
 
+static size_t in_flight_count(const link_entry_t *L)
+{
+    size_t n = 0;
+    for (int i = 0; i < CONFIG_ESP_GMP_TX_QUEUE_DEPTH; i++) {
+        if (L->in_flight[i]) {
+            n++;
+        }
+    }
+    return n;
+}
+
 static bool link_any_active(void)
 {
     for (int i = 0; i < CONFIG_ESP_GMP_MAX_LINKS; i++) {
@@ -218,7 +267,8 @@ static esp_err_t link_queue_frame_locked(link_entry_t *L, uint8_t *frame, size_t
 {
     if (L->txq_count >= CONFIG_ESP_GMP_TX_QUEUE_DEPTH) {
         free(frame);
-        return ESP_ERR_INVALID_STATE;
+        /* Transient: link is alive, caller may retry once in-flight frames drain. */
+        return ESP_ERR_ESP_GMP_TX_QUEUE_FULL;
     }
 
     size_t tail = (L->txq_head + L->txq_count) % CONFIG_ESP_GMP_TX_QUEUE_DEPTH;
@@ -403,6 +453,34 @@ void esp_gmp_init(void)
     }
     s_cb = NULL;
     s_cb_ctx = NULL;
+
+    /* Initialize handler table (Phase 2) */
+    memset(s_handlers, 0, sizeof(s_handlers));
+    s_handlers_mutex = xSemaphoreCreateMutex();
+    if (!s_handlers_mutex) {
+        vSemaphoreDelete(s_links_mutex);
+        s_links_mutex = NULL;
+        return;
+    }
+
+    /* Initialize link event subscribers (Phase 2) */
+    memset(s_link_subs, 0, sizeof(s_link_subs));
+    s_link_subs_mutex = xSemaphoreCreateMutex();
+    if (!s_link_subs_mutex) {
+        vSemaphoreDelete(s_handlers_mutex);
+        vSemaphoreDelete(s_links_mutex);
+        s_handlers_mutex = NULL;
+        s_links_mutex = NULL;
+        return;
+    }
+
+    /* Initialize per-link sequence state (Phase 2) */
+    memset(s_link_seqs, 0, sizeof(s_link_seqs));
+    for (int i = 0; i < CONFIG_ESP_GMP_MAX_LINKS; i++) {
+        s_link_seqs[i].lock = (portMUX_TYPE)portMUX_INITIALIZER_UNLOCKED;
+        s_link_seqs[i].next_seq = 1;  /* Start from 1, skip 0 */
+    }
+
     s_inited = true;
 }
 
@@ -424,6 +502,21 @@ void esp_gmp_deinit(void)
         vSemaphoreDelete(s_links_mutex);
         s_links_mutex = NULL;
     }
+
+    /* Clean up handler table (Phase 2) */
+    if (s_handlers_mutex) {
+        vSemaphoreDelete(s_handlers_mutex);
+        s_handlers_mutex = NULL;
+    }
+    memset(s_handlers, 0, sizeof(s_handlers));
+
+    /* Clean up link event subscribers (Phase 2) */
+    if (s_link_subs_mutex) {
+        vSemaphoreDelete(s_link_subs_mutex);
+        s_link_subs_mutex = NULL;
+    }
+    memset(s_link_subs, 0, sizeof(s_link_subs));
+
     s_inited = false;
 }
 
@@ -470,6 +563,13 @@ esp_err_t esp_gmp_link_register(esp_gmp_link_t link, const esp_gmp_transport_t *
 
 void esp_gmp_link_unregister(esp_gmp_link_t link)
 {
+    if (!link) {
+        return;
+    }
+
+    /* Notify subscribers before tearing down TX state so profiles can abort. */
+    esp_gmp_notify_link_event(link, ESP_GMP_LINK_EVENT_DOWN, ESP_OK);
+
     if (!s_links_mutex || xSemaphoreTake(s_links_mutex, portMAX_DELAY) != pdTRUE) {
         return;
     }
@@ -567,12 +667,28 @@ bool esp_gmp_input(esp_gmp_link_t link, const uint8_t *data, size_t len)
 
     xSemaphoreGive(L->mutex);
 
-    if (s_links_mutex && xSemaphoreTake(s_links_mutex, portMAX_DELAY) == pdTRUE) {
+    /*
+     * Resolve the consumer before deciding this is an unknown command: a group
+     * handler counts as a consumer, so the legacy callback is only consulted
+     * when no handler claims this group_id.
+     */
+    esp_gmp_packet_handler_fn handler = NULL;
+    if (s_handlers_mutex && xSemaphoreTake(s_handlers_mutex, portMAX_DELAY) == pdTRUE) {
+        for (int i = 0; i < CONFIG_ESP_GMP_MAX_HANDLERS; i++) {
+            if (s_handlers[i].active && s_handlers[i].group_id == f.group_id) {
+                handler = s_handlers[i].handler;
+                break;
+            }
+        }
+        xSemaphoreGive(s_handlers_mutex);
+    }
+
+    if (!handler && s_links_mutex && xSemaphoreTake(s_links_mutex, portMAX_DELAY) == pdTRUE) {
         cb = s_cb;
         cb_ctx = s_cb_ctx;
         xSemaphoreGive(s_links_mutex);
     }
-    if (!cb) {
+    if (!handler && !cb) {
         if (request) {
             uint8_t *frame = NULL;
             size_t frame_len = 0;
@@ -612,6 +728,14 @@ bool esp_gmp_input(esp_gmp_link_t link, const uint8_t *data, size_t len)
         .frame_buf = (uint8_t *)data,
         .frame_len = len,
     };
+
+    /*
+     * Dispatch to the consumer resolved above: group handler first, otherwise
+     * the legacy single callback. Exactly one of the two is set here.
+     */
+    if (handler) {
+        return handler(&rx);
+    }
     return cb(cb_ctx, &rx);
 }
 
@@ -684,4 +808,249 @@ esp_err_t esp_gmp_send(esp_gmp_link_t link, const esp_gmp_tx_params_t *params, c
     xSemaphoreGive(L->mutex);
     tx_send_op_run(&op);
     return err;
+}
+
+size_t esp_gmp_tx_in_flight(esp_gmp_link_t link)
+{
+    link_entry_t *L = link_find(link);
+    if (!L || L->key != link || !L->mutex) {
+        return 0;
+    }
+
+    if (xSemaphoreTake(L->mutex, portMAX_DELAY) != pdTRUE) {
+        return 0;
+    }
+    size_t depth = 0;
+    if (L->key == link) {
+        depth = L->txq_count + in_flight_count(L);
+    }
+    xSemaphoreGive(L->mutex);
+    return depth;
+}
+
+size_t esp_gmp_tx_capacity(void)
+{
+    return (size_t)CONFIG_ESP_GMP_TX_QUEUE_DEPTH;
+}
+
+size_t esp_gmp_recommended_pipeline_depth(esp_gmp_link_t link)
+{
+    size_t capacity = esp_gmp_tx_capacity();
+    size_t in_flight = esp_gmp_tx_in_flight(link);
+    if (capacity == 0) {
+        return 1;
+    }
+    if (in_flight >= capacity) {
+        return 1;
+    }
+    return capacity - in_flight;
+}
+
+/* ========== Phase 2: Handler Table Implementation ========== */
+
+esp_err_t esp_gmp_register_handler(uint8_t group_id,
+                                   esp_gmp_packet_handler_fn handler,
+                                   void *ctx)
+{
+    if (!handler || !s_inited || !s_handlers_mutex) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    xSemaphoreTake(s_handlers_mutex, portMAX_DELAY);
+
+    /* Check if already registered */
+    for (int i = 0; i < CONFIG_ESP_GMP_MAX_HANDLERS; i++) {
+        if (s_handlers[i].active && s_handlers[i].group_id == group_id) {
+            /* Already registered - update it */
+            s_handlers[i].handler = handler;
+            s_handlers[i].ctx = ctx;
+            xSemaphoreGive(s_handlers_mutex);
+            return ESP_OK;
+        }
+    }
+
+    /* Find free slot */
+    for (int i = 0; i < CONFIG_ESP_GMP_MAX_HANDLERS; i++) {
+        if (!s_handlers[i].active) {
+            s_handlers[i].active = true;
+            s_handlers[i].group_id = group_id;
+            s_handlers[i].handler = handler;
+            s_handlers[i].ctx = ctx;
+            xSemaphoreGive(s_handlers_mutex);
+            ESP_LOGI(TAG, "Registered handler for group_id=0x%02x", group_id);
+            return ESP_OK;
+        }
+    }
+
+    xSemaphoreGive(s_handlers_mutex);
+    ESP_LOGE(TAG, "Handler table full, cannot register group_id=0x%02x", group_id);
+    return ESP_ERR_NO_MEM;
+}
+
+esp_err_t esp_gmp_unregister_handler(uint8_t group_id)
+{
+    if (!s_inited || !s_handlers_mutex) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    xSemaphoreTake(s_handlers_mutex, portMAX_DELAY);
+
+    for (int i = 0; i < CONFIG_ESP_GMP_MAX_HANDLERS; i++) {
+        if (s_handlers[i].active && s_handlers[i].group_id == group_id) {
+            s_handlers[i].active = false;
+            s_handlers[i].handler = NULL;
+            s_handlers[i].ctx = NULL;
+            xSemaphoreGive(s_handlers_mutex);
+            ESP_LOGI(TAG, "Unregistered handler for group_id=0x%02x", group_id);
+            return ESP_OK;
+        }
+    }
+
+    xSemaphoreGive(s_handlers_mutex);
+    ESP_LOGW(TAG, "Handler not found for group_id=0x%02x", group_id);
+    return ESP_ERR_NOT_FOUND;
+}
+
+/* ========== Phase 2: Link Event Subscription ========== */
+
+esp_gmp_link_event_sub_t esp_gmp_link_event_subscribe(esp_gmp_link_event_fn fn,
+                                                      void *ctx)
+{
+    if (!fn || !s_inited || !s_link_subs_mutex) {
+        return NULL;
+    }
+
+    xSemaphoreTake(s_link_subs_mutex, portMAX_DELAY);
+
+    /* Find free slot */
+    for (int i = 0; i < CONFIG_ESP_GMP_MAX_LINK_EVENT_SUBSCRIBERS; i++) {
+        if (!s_link_subs[i].active) {
+            s_link_subs[i].active = true;
+            s_link_subs[i].fn = fn;
+            s_link_subs[i].ctx = ctx;
+            xSemaphoreGive(s_link_subs_mutex);
+            ESP_LOGI(TAG, "Link event subscriber registered (slot %d)", i);
+            return &s_link_subs[i];
+        }
+    }
+
+    xSemaphoreGive(s_link_subs_mutex);
+    ESP_LOGE(TAG, "Link event subscriber table full");
+    return NULL;
+}
+
+void esp_gmp_link_event_unsubscribe(esp_gmp_link_event_sub_t sub)
+{
+    if (!sub || !s_inited || !s_link_subs_mutex) {
+        return;
+    }
+
+    xSemaphoreTake(s_link_subs_mutex, portMAX_DELAY);
+
+    for (int i = 0; i < CONFIG_ESP_GMP_MAX_LINK_EVENT_SUBSCRIBERS; i++) {
+        if (&s_link_subs[i] == sub && s_link_subs[i].active) {
+            s_link_subs[i].active = false;
+            s_link_subs[i].fn = NULL;
+            s_link_subs[i].ctx = NULL;
+            xSemaphoreGive(s_link_subs_mutex);
+            ESP_LOGI(TAG, "Link event subscriber unregistered (slot %d)", i);
+            return;
+        }
+    }
+
+    xSemaphoreGive(s_link_subs_mutex);
+    ESP_LOGW(TAG, "Link event subscriber not found");
+}
+
+void esp_gmp_notify_link_event(esp_gmp_link_t link,
+                               esp_gmp_link_event_type_t event,
+                               esp_err_t error)
+{
+    if (!link || !s_inited || !s_link_subs_mutex) {
+        return;
+    }
+
+    xSemaphoreTake(s_link_subs_mutex, portMAX_DELAY);
+
+    for (int i = 0; i < CONFIG_ESP_GMP_MAX_LINK_EVENT_SUBSCRIBERS; i++) {
+        if (s_link_subs[i].active && s_link_subs[i].fn) {
+            /* Call subscriber callback */
+            s_link_subs[i].fn(link, event, error, s_link_subs[i].ctx);
+        }
+    }
+
+    xSemaphoreGive(s_link_subs_mutex);
+}
+
+/* ========== Phase 2: Helper Functions ========== */
+
+esp_err_t esp_gmp_reply(const esp_gmp_rx_t *req,
+                        uint8_t status,
+                        const void *payload,
+                        size_t payload_len)
+{
+    if (!req || !req->link) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /* Construct response parameters */
+    esp_gmp_tx_params_t params = {
+        .ver = req->ver,
+        .op = rsp_op(req->op),
+        .group_id = req->group_id,
+        .sequence = req->sequence,  /* Echo request sequence */
+        .command_id = req->command_id,
+        .flags = 0,
+        .status = status,
+    };
+
+    return esp_gmp_send(req->link, &params, payload, payload_len);
+}
+
+uint16_t esp_gmp_seq_next(esp_gmp_link_t link)
+{
+    if (!link) {
+        return 0;
+    }
+
+    /* Find or allocate link sequence state */
+    for (int i = 0; i < CONFIG_ESP_GMP_MAX_LINKS; i++) {
+        if (s_link_seqs[i].link == link || s_link_seqs[i].link == NULL) {
+            portENTER_CRITICAL(&s_link_seqs[i].lock);
+
+            /* Initialize on first use */
+            if (s_link_seqs[i].link == NULL) {
+                s_link_seqs[i].link = link;
+                s_link_seqs[i].next_seq = 1;
+            }
+
+            /* Allocate next sequence (skip 0) */
+            uint16_t seq = s_link_seqs[i].next_seq++;
+            if (seq == 0) {
+                seq = s_link_seqs[i].next_seq++;
+            }
+            if (s_link_seqs[i].next_seq == 0) {
+                s_link_seqs[i].next_seq = 1;
+            }
+
+            portEXIT_CRITICAL(&s_link_seqs[i].lock);
+            return seq;
+        }
+    }
+
+    /* No free slots - fallback to simple counter (not ideal but safe) */
+    static uint16_t fallback_seq = 1;
+    static portMUX_TYPE fallback_lock = portMUX_INITIALIZER_UNLOCKED;
+
+    portENTER_CRITICAL(&fallback_lock);
+    uint16_t seq = fallback_seq++;
+    if (seq == 0) {
+        seq = fallback_seq++;
+    }
+    if (fallback_seq == 0) {
+        fallback_seq = 1;
+    }
+    portEXIT_CRITICAL(&fallback_lock);
+
+    return seq;
 }

@@ -40,17 +40,6 @@ esp_err_t esp_gmp_flux_get_callbacks(esp_gmp_link_t link, flux_callbacks_t *out,
  */
 esp_err_t esp_gmp_flux_get_gatt_callbacks(esp_gmp_link_t link, ble_session_callbacks_t *out, const ble_session_callbacks_t *user_cbs);
 
-/**
- * Call from gatt_session data_received_cb when not using esp_gmp_flux_get_callbacks
- * at flux_session_create time. Feeds GMP and frees @p data per Flux ownership rules.
- */
-void __attribute__((deprecated("Use esp_gmp_flux_get_gatt_callbacks instead")))
-esp_gmp_flux_on_data_received(flux_session_t *session, uint8_t stream_id, const uint8_t *data, uint32_t size);
-
-/** Call from gatt_session session_complete_cb to release GMP TX buffers. */
-void __attribute__((deprecated("Use esp_gmp_flux_get_gatt_callbacks instead")))
-esp_gmp_flux_on_session_complete(flux_session_t *session, uint8_t stream_id, esp_err_t status, const uint8_t *data, uint32_t size);
-
 #ifdef __cplusplus
 }
 #endif

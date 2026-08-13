@@ -15,7 +15,7 @@ ESP-GMP defines:
 - A fixed 10-byte GMP frame header.
 - Request and response opcodes.
 - A 16-bit sequence number used to pair responses with requests.
-- Standard groups for OS capability query and OTA upload.
+- Standard groups for OS capability query, OTA upload, and file transfer.
 - A transport binding model based on `esp_gmp_transport_t`.
 
 ESP-GMP does not define:
@@ -100,7 +100,8 @@ bytes. Implementations may apply a smaller policy or transport limit.
 |---:|---|---|
 | `0x00` | `GRP_OS` | OS and capability commands |
 | `0x01` | `GRP_OTA` | OTA upload commands |
-| `0x02`-`0xFF` | Reserved | Not defined by v1 |
+| `0x08` | `GRP_FILE_TRANSFER` | File transfer commands |
+| `0x02`-`0x07`, `0x09`-`0xFF` | Reserved | Not defined by v1 |
 
 ### 5.2 `GRP_OS` Commands
 
@@ -115,6 +116,15 @@ bytes. Implementations may apply a smaller policy or transport limit.
 | `0x01` | `OTA_UPLOAD_DATA` | `WRITE_REQ` / `WRITE_RSP` | Upload one firmware data chunk |
 | `0x02` | `OTA_UPLOAD_CONTROL` | `WRITE_REQ` / `WRITE_RSP` | Start, finish, abort, or erase upload session |
 | `0x03` | `OTA_UPLOAD_QUERY` | `READ_REQ` / `READ_RSP` | Query OTA upload state |
+
+### 5.4 `GRP_FILE_TRANSFER` Commands
+
+File transfer uses `group_id = GRP_FILE_TRANSFER` (`0x08`). Command IDs and
+payload layouts for `TRANSFER_META`, `DATA_BLOCK`, `FINAL_CONFIRM`, and `ABORT`
+are defined in
+`profiles/file_transfer/include/esp_gmp_ft_proto.h`. That header (and the golden
+frames in `test_ft`) is the frozen wire source of truth — this SPEC does not
+redefine those bytes.
 
 Responses must use the same `group_id`, `command_id`, and `sequence` as the
 request they answer.

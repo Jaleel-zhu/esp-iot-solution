@@ -61,15 +61,6 @@ static bool hook_has_in_flight(const gmp_flux_hook_t *hook)
     return hook && hook->flux && !flux_session_send_idle(hook->flux);
 }
 
-static size_t flux_max_message_bytes(const flux_session_t *flux)
-{
-    if (!flux || flux->max_start_data_size == 0) {
-        return 0;
-    }
-    return (size_t)flux->max_start_data_size +
-           (size_t)(FLUX_MAX_FRAGMENTS - 1) * (size_t)flux->max_fragment_data_size;
-}
-
 static bool gmp_flux_forward_to_gmp(flux_session_t *session, const uint8_t *data, uint32_t size)
 {
     gmp_flux_hook_t *hook = hook_find_by_flux(session);
@@ -105,7 +96,7 @@ static esp_err_t gmp_flux_send(void *ctx, const uint8_t *data, size_t len)
 
 static size_t gmp_flux_max_payload(void *ctx)
 {
-    size_t cap = flux_max_message_bytes((const flux_session_t *)ctx);
+    size_t cap = flux_session_max_message_bytes((const flux_session_t *)ctx);
     return cap > 10 ? cap - 10 : 0;
 }
 
@@ -182,6 +173,7 @@ static void gmp_flux_session_complete(flux_session_t *session, uint8_t stream_id
 {
     gmp_flux_hook_t *hook = hook_find_by_flux(session);
     void (*user_complete)(flux_session_t *session, uint8_t stream_id, esp_err_t status, const uint8_t *data, uint32_t size) = NULL;
+    esp_gmp_link_t link = hook ? hook->link : NULL;
 
     if (hook) {
         user_complete = hook->user_cbs.session_complete_cb;
@@ -192,6 +184,10 @@ static void gmp_flux_session_complete(flux_session_t *session, uint8_t stream_id
     if (user_complete) {
         /* GMP owns/releases the TX frame; do not forward a freed pointer. */
         user_complete(session, stream_id, status, NULL, 0);
+    }
+
+    if (link && status != ESP_OK) {
+        esp_gmp_notify_link_event(link, ESP_GMP_LINK_EVENT_TRANSPORT_ERROR, status);
     }
 }
 
@@ -206,8 +202,13 @@ static void gmp_flux_progress(flux_session_t *session, uint32_t transferred, uin
 static void gmp_flux_error(flux_session_t *session, esp_err_t error)
 {
     gmp_flux_hook_t *hook = hook_find_by_flux(session);
+    esp_gmp_link_t link = hook ? hook->link : NULL;
+
     if (hook && hook->user_cbs.error_cb) {
         hook->user_cbs.error_cb(session, error);
+    }
+    if (link) {
+        esp_gmp_notify_link_event(link, ESP_GMP_LINK_EVENT_TRANSPORT_ERROR, error);
     }
 }
 
@@ -241,8 +242,9 @@ static void gmp_flux_gatt_data_received(gatt_session_t *session, uint8_t stream_
     gmp_flux_hook_t *hook = hook_find((esp_gmp_link_t)session);
     bool taken = false;
 
-    if (session && session->flux_session) {
-        taken = gmp_flux_forward_to_gmp(session->flux_session, data, size);
+    flux_session_t *flux = gatt_session_get_flux(session);
+    if (flux) {
+        taken = gmp_flux_forward_to_gmp(flux, data, size);
     }
 
     if (!taken && hook && hook->user_gatt_cbs.data_received_cb) {
@@ -259,19 +261,25 @@ static void gmp_flux_gatt_session_complete(gatt_session_t *session, uint8_t stre
 {
     gmp_flux_hook_t *hook = hook_find((esp_gmp_link_t)session);
     void (*user_complete)(gatt_session_t *session, uint8_t stream_id, esp_err_t status, const uint8_t *data, uint32_t size) = NULL;
+    esp_gmp_link_t link = hook ? hook->link : NULL;
 
     if (hook) {
         user_complete = hook->user_gatt_cbs.session_complete_cb;
     }
 
-    if (session && session->flux_session) {
-        gmp_flux_tx_done_and_cleanup(session->flux_session, data);
+    flux_session_t *flux = gatt_session_get_flux(session);
+    if (flux) {
+        gmp_flux_tx_done_and_cleanup(flux, data);
     }
     (void)size;
 
     if (user_complete) {
         /* GMP owns/releases the TX frame; do not forward a freed pointer. */
         user_complete(session, stream_id, status, NULL, 0);
+    }
+
+    if (link && status != ESP_OK) {
+        esp_gmp_notify_link_event(link, ESP_GMP_LINK_EVENT_TRANSPORT_ERROR, status);
     }
 }
 
@@ -286,8 +294,13 @@ static void gmp_flux_gatt_progress(gatt_session_t *session, uint32_t transferred
 static void gmp_flux_gatt_error(gatt_session_t *session, esp_err_t error)
 {
     gmp_flux_hook_t *hook = hook_find((esp_gmp_link_t)session);
+    esp_gmp_link_t link = hook ? hook->link : NULL;
+
     if (hook && hook->user_gatt_cbs.error_cb) {
         hook->user_gatt_cbs.error_cb(session, error);
+    }
+    if (link) {
+        esp_gmp_notify_link_event(link, ESP_GMP_LINK_EVENT_TRANSPORT_ERROR, error);
     }
 }
 
@@ -315,20 +328,4 @@ esp_err_t esp_gmp_flux_get_gatt_callbacks(esp_gmp_link_t link, ble_session_callb
     out->error_cb = gmp_flux_gatt_error;
     out->arg = NULL;
     return ESP_OK;
-}
-
-void esp_gmp_flux_on_data_received(flux_session_t *session, uint8_t stream_id, const uint8_t *data, uint32_t size)
-{
-    (void)stream_id;
-    if (!gmp_flux_forward_to_gmp(session, data, size)) {
-        free((void *)data);
-    }
-}
-
-void esp_gmp_flux_on_session_complete(flux_session_t *session, uint8_t stream_id, esp_err_t status, const uint8_t *data, uint32_t size)
-{
-    (void)stream_id;
-    (void)status;
-    (void)size;
-    gmp_flux_tx_done_and_cleanup(session, data);
 }

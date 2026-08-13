@@ -28,6 +28,7 @@
 #include "flux_gatt_session.h"
 #include "esp_gmp.h"
 #include "esp_gmp_flux.h"
+#include "esp_gmp_os.h"
 #include "esp_gmp_ota.h"
 #include "gmp_ble_uuids.h"
 #include "gmp_session_teardown.h"
@@ -58,68 +59,6 @@ static int find_session_idx(uint16_t conn_handle)
     return -1;
 }
 
-static void build_os_cap_report(uint8_t *cap, esp_gmp_link_t link)
-{
-    size_t max_payload = esp_gmp_max_payload_effective(link);
-    if (max_payload > 0xFFFF) {
-        max_payload = 0xFFFF;
-    }
-
-    cap[0] = 0x02;
-    cap[1] = 0x02;
-    cap[2] = 0x01;
-    cap[3] = 0x02;
-    cap[4] = 0x04;
-    cap[5] = 0x00;
-    cap[6] = (uint8_t)(max_payload >> 24);
-    cap[7] = (uint8_t)(max_payload >> 16);
-    cap[8] = (uint8_t)(max_payload >> 8);
-    cap[9] = (uint8_t)max_payload;
-    cap[10] = 0x01;
-    cap[11] = 0x00;
-}
-
-static bool on_gmp_packet(void *ctx, const esp_gmp_rx_t *pkt)
-{
-    (void)ctx;
-
-    if (pkt->group_id == ESP_GMP_GRP_OTA) {
-        return esp_gmp_ota_on_packet(pkt);
-    }
-
-    if (pkt->op == ESP_GMP_OP_READ_REQ && pkt->group_id == ESP_GMP_GRP_OS &&
-            pkt->command_id == ESP_GMP_OS_CAP_QUERY) {
-        uint8_t cap[12];
-        build_os_cap_report(cap, pkt->link);
-
-        esp_gmp_tx_params_t tx = {
-            .ver = ESP_GMP_VER,
-            .op = ESP_GMP_OP_READ_RSP,
-            .group_id = pkt->group_id,
-            .sequence = pkt->sequence,
-            .command_id = pkt->command_id,
-            .flags = 0,
-            .status = ESP_GMP_STATUS_OK,
-        };
-        esp_gmp_send(pkt->link, &tx, cap, sizeof(cap));
-        return false;
-    }
-
-    if (pkt->op == ESP_GMP_OP_WRITE_REQ || pkt->op == ESP_GMP_OP_READ_REQ) {
-        esp_gmp_tx_params_t tx = {
-            .ver = ESP_GMP_VER,
-            .op = (pkt->op == ESP_GMP_OP_WRITE_REQ) ? ESP_GMP_OP_WRITE_RSP : ESP_GMP_OP_READ_RSP,
-            .group_id = pkt->group_id,
-            .sequence = pkt->sequence,
-            .command_id = pkt->command_id,
-            .flags = 0,
-            .status = ESP_GMP_STATUS_UNKNOWN_COMMAND,
-        };
-        esp_gmp_send(pkt->link, &tx, NULL, 0);
-    }
-    return false;
-}
-
 static esp_err_t setup_gmp_callbacks(gatt_session_t *session)
 {
     ble_session_callbacks_t callbacks = { 0 };
@@ -133,12 +72,12 @@ static esp_err_t setup_gmp_callbacks(gatt_session_t *session)
 
 static esp_err_t setup_gmp_session(gatt_session_t *session)
 {
-    return esp_gmp_flux_link_register(session, session->flux_session);
+    return esp_gmp_flux_link_register(session, gatt_session_get_flux(session));
 }
 
 static void teardown_gmp_session(gatt_session_t *session)
 {
-    esp_gmp_ota_on_link_down(session);
+    /* LINK_DOWN is notified by unregister; OTA device profile aborts itself. */
     esp_gmp_flux_link_unregister(session);
 }
 
@@ -200,6 +139,62 @@ static void process_pending_teardowns(void)
     }
 }
 
+static void activate_session_task(void *arg)
+{
+    gatt_session_t *session = (gatt_session_t *)arg;
+    const uint16_t need_mtu = 185;
+    uint16_t mtu = BLE_ATT_MTU_DFLT;
+
+    for (int i = 0; i < 40; i++) {
+        if (ble_manager_get_mtu_by_conn(g_ble_manager, session->conn_handle, &mtu) == ESP_OK &&
+                mtu >= need_mtu) {
+            break;
+        }
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+    if (mtu < need_mtu) {
+        ESP_LOGW(TAG, "MTU still low (%u); activating anyway", (unsigned)mtu);
+    }
+    if (mtu < BLE_ATT_MTU_DFLT) {
+        mtu = BLE_ATT_MTU_DFLT;
+    }
+    (void)gatt_session_set_mtu(session, mtu);
+
+    if (setup_gmp_callbacks(session) != ESP_OK) {
+        ESP_LOGE(TAG, "setup GMP callbacks failed");
+        gatt_session_schedule_destroy(session);
+        ble_gap_terminate(session->conn_handle, BLE_ERR_REM_USER_CONN_TERM);
+        vTaskDelete(NULL);
+        return;
+    }
+
+    bool stored = false;
+    for (int i = 0; i < MAX_CONNECTIONS; i++) {
+        if (!g_sessions[i]) {
+            g_sessions[i] = session;
+            esp_err_t err = setup_gmp_session(session);
+            if (err != ESP_OK) {
+                ESP_LOGE(TAG, "GMP Flux registration failed: %s", esp_err_to_name(err));
+                g_sessions[i] = NULL;
+                gatt_session_schedule_destroy(session);
+                ble_gap_terminate(session->conn_handle, BLE_ERR_REM_USER_CONN_TERM);
+                vTaskDelete(NULL);
+                return;
+            }
+            stored = true;
+            ESP_LOGI(TAG, "GMP session ready conn=%d mtu=%u", session->conn_handle, (unsigned)mtu);
+            break;
+        }
+    }
+    if (!stored) {
+        ESP_LOGW(TAG, "max connections (%d) reached, rejecting conn=%d",
+                 MAX_CONNECTIONS, session->conn_handle);
+        gatt_session_schedule_destroy(session);
+        ble_gap_terminate(session->conn_handle, BLE_ERR_REM_USER_CONN_TERM);
+    }
+    vTaskDelete(NULL);
+}
+
 static void ble_manager_connect_cb(ble_manager_t *manager, uint8_t type, ble_connection_t *conn, int status, void *arg)
 {
     (void)manager;
@@ -216,7 +211,10 @@ static void ble_manager_connect_cb(ble_manager_t *manager, uint8_t type, ble_con
     }
 
     uint16_t mtu = BLE_ATT_MTU_DFLT;
-    ble_manager_get_mtu_by_conn(g_ble_manager, conn->conn_handle, &mtu);
+    if (ble_manager_get_mtu_by_conn(g_ble_manager, conn->conn_handle, &mtu) != ESP_OK ||
+            mtu < BLE_ATT_MTU_DFLT) {
+        mtu = BLE_ATT_MTU_DFLT;
+    }
 
     gatt_session_t *session = gatt_session_create(conn->conn_handle, NULL,
                                                   g_chr_tx_handle, g_chr_rx_handle,
@@ -226,34 +224,10 @@ static void ble_manager_connect_cb(ble_manager_t *manager, uint8_t type, ble_con
         return;
     }
 
-    if (setup_gmp_callbacks(session) != ESP_OK) {
-        ESP_LOGE(TAG, "setup GMP callbacks failed");
-        gatt_session_destroy(session);
-        ble_gap_terminate(conn->conn_handle, BLE_ERR_REM_USER_CONN_TERM);
-        return;
-    }
-
-    bool stored = false;
-    for (int i = 0; i < MAX_CONNECTIONS; i++) {
-        if (!g_sessions[i]) {
-            g_sessions[i] = session;
-            esp_err_t err = setup_gmp_session(session);
-            if (err != ESP_OK) {
-                ESP_LOGE(TAG, "GMP Flux registration failed: %s", esp_err_to_name(err));
-                g_sessions[i] = NULL;
-                gatt_session_destroy(session);
-                ble_gap_terminate(conn->conn_handle, BLE_ERR_REM_USER_CONN_TERM);
-                return;
-            }
-            stored = true;
-            ESP_LOGI(TAG, "GMP session ready conn=%d mtu=%u", conn->conn_handle, (unsigned)mtu);
-            break;
-        }
-    }
-    if (!stored) {
-        ESP_LOGW(TAG, "max connections (%d) reached, rejecting conn=%d",
-                 MAX_CONNECTIONS, conn->conn_handle);
-        gatt_session_destroy(session);
+    /* Defer GMP register until ATT MTU exchange finishes (default/0 is too small). */
+    if (xTaskCreate(activate_session_task, "gmp_srv_up", 4096, session, 5, NULL) != pdPASS) {
+        ESP_LOGE(TAG, "Failed to schedule session activation");
+        gatt_session_schedule_destroy(session);
         ble_gap_terminate(conn->conn_handle, BLE_ERR_REM_USER_CONN_TERM);
     }
 }
@@ -404,7 +378,7 @@ void app_main(void)
     ESP_ERROR_CHECK(ret);
 
     esp_gmp_init();
-    esp_gmp_on_packet_register(on_gmp_packet, NULL);
+    ESP_ERROR_CHECK(esp_gmp_os_init());
     ESP_ERROR_CHECK(esp_gmp_ota_init(NULL));
 
     ESP_ERROR_CHECK(nimble_port_init());

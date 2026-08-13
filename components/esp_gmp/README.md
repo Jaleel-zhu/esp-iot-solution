@@ -9,20 +9,26 @@ Protocol specification: [`SPEC.md`](SPEC.md).
 ## Architecture
 
 ```text
-Application (OTA, OS_CAP_QUERY, …)
-        ↓ esp_gmp_send / on_packet
-   esp_gmp (this component)
+Application
+        ↓
+   profiles/{os,ota,file_transfer}   # optional, Kconfig-trimmed
+        ↓ esp_gmp_register_handler / link events
+   esp_gmp core
         ↓ esp_gmp_transport_t
    esp_flux / UART / socket / …
 ```
 
 GMP does **not** implement `sub_seq` fragmentation or RX reassembly; those belong to the bound transport (for example Flux).
 
+File Transfer migration notes: [`MIGRATION_FT.md`](MIGRATION_FT.md). Unification plan: repo-root `PROFILE_UNIFICATION.md`.
+
 ## Features
 
-- Transport-agnostic core: framing, CRC (optional), multi-link TX queue
+- Transport-agnostic core: framing, CRC (optional), multi-link TX queue, group handler table, multi-subscriber link events
 - Optional Flux/GATT adapters (`esp_gmp_flux_*`) for BLE stacks using `esp_flux`
-- Optional OTA submodule that streams firmware into the next OTA partition with SHA256 verify
+- Optional **OTA** profile: device and/or host roles (`CONFIG_ESP_GMP_OTA_DEVICE` / `OTA_HOST`)
+- Optional **File Transfer** profile (`CONFIG_ESP_GMP_PROFILE_FILE_TRANSFER`)
+- Optional **OS** profile for runtime capability bits (`CONFIG_ESP_GMP_PROFILE_OS`)
 - Product-policy payload cap via Kconfig, with an effective limit of `policy ∩ transport`
 
 ## Quick start (preferred: Flux / GATT)

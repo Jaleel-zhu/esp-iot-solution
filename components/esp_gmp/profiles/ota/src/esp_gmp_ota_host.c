@@ -4,28 +4,43 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include "gmp_ota_client.h"
-#include "esp_gmp.h"
+#include "esp_gmp_ota_host.h"
 #include "esp_gmp_ota_proto.h"
 #include "esp_gmp_sha256.h"
+#include "esp_gmp.h"
+#include "esp_gmp_profile.h"
 #include "esp_log.h"
+#include "sdkconfig.h"
+
 #include <inttypes.h>
 #include <stdlib.h>
-#include "freertos/FreeRTOS.h"
-#include "freertos/semphr.h"
-#include "freertos/portmacro.h"
 #include <string.h>
 
-static const char *TAG = "gmp_ota_client";
+#include "freertos/FreeRTOS.h"
+#include "freertos/portmacro.h"
+#include "freertos/semphr.h"
+
+static const char *TAG = "esp_gmp_ota_host";
 
 /** Max in-flight OTA_UPLOAD_DATA GMP messages (matches Flux / esp_gmp TX concurrency). */
-#ifndef GMP_OTA_CLIENT_PIPE_DEPTH
-#define GMP_OTA_CLIENT_PIPE_DEPTH 2
+#ifndef ESP_GMP_OTA_HOST_PIPE_DEPTH
+#define ESP_GMP_OTA_HOST_PIPE_DEPTH 2
 #endif
 
 #define GMP_RSP_TIMEOUT_MS 40000
 #define GMP_DATA_BUSY_MAX_RETRIES 5
 #define GMP_CTRL_BUSY_MAX_RETRIES 5
+
+static uint16_t s_host_seq;
+
+static uint16_t host_next_seq(void)
+{
+    s_host_seq++;
+    if (s_host_seq == 0) {
+        s_host_seq = 1;
+    }
+    return s_host_seq;
+}
 
 typedef struct {
     uint16_t seq;
@@ -39,6 +54,12 @@ typedef struct {
     bool done;
 } gmp_pipe_slot_t;
 
+static bool s_inited;
+static esp_gmp_ota_host_config_t s_cfg;
+static esp_gmp_link_event_sub_t s_link_sub;
+static bool s_registered_ota;
+static bool s_registered_os;
+
 static SemaphoreHandle_t s_rsp_sem;
 static SemaphoreHandle_t s_pipe_sem;
 
@@ -48,39 +69,42 @@ static uint8_t s_rsp_status;
 static uint8_t s_rsp_payload[64];
 static size_t s_rsp_payload_len;
 
-static gmp_pipe_slot_t s_pipe[GMP_OTA_CLIENT_PIPE_DEPTH];
+static gmp_pipe_slot_t s_pipe[ESP_GMP_OTA_HOST_PIPE_DEPTH];
 static portMUX_TYPE s_ctrl_lock = portMUX_INITIALIZER_UNLOCKED;
 static portMUX_TYPE s_pipe_lock = portMUX_INITIALIZER_UNLOCKED;
 static volatile bool s_upload_cancel;
-
-static uint16_t rd_be16(const uint8_t *p)
-{
-    return (uint16_t)((uint16_t)p[0] << 8 | p[1]);
-}
 
 static uint32_t rd_be32(const uint8_t *p)
 {
     return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | (uint32_t)p[3];
 }
 
-static void wr_be16(uint8_t *p, uint16_t v)
+static void emit_event(uint8_t event_id, uint64_t transferred, uint64_t total)
 {
-    p[0] = (uint8_t)(v >> 8);
-    p[1] = (uint8_t)v;
-}
-
-static void wr_be32(uint8_t *p, uint32_t v)
-{
-    p[0] = (uint8_t)(v >> 24);
-    p[1] = (uint8_t)(v >> 16);
-    p[2] = (uint8_t)(v >> 8);
-    p[3] = (uint8_t)v;
+    if (!s_cfg.event_cb) {
+        return;
+    }
+    uint8_t percent = total == 0 ? 0 : (uint8_t)((transferred * 100) / total);
+    if (percent > 100) {
+        percent = 100;
+    }
+    esp_gmp_profile_event_t ev = {
+        .event_id = event_id,
+        .role = ESP_GMP_OTA_ROLE_HOST,
+        .transferred = transferred,
+        .total = total,
+        .percent = percent,
+        .reason = 0,
+        .detail = ESP_OK,
+        .profile_extra = NULL,
+    };
+    s_cfg.event_cb(&ev, s_cfg.event_ctx);
 }
 
 static void pipe_reset(void)
 {
     portENTER_CRITICAL(&s_pipe_lock);
-    for (int i = 0; i < GMP_OTA_CLIENT_PIPE_DEPTH; i++) {
+    for (int i = 0; i < ESP_GMP_OTA_HOST_PIPE_DEPTH; i++) {
         if (s_pipe[i].payload) {
             free(s_pipe[i].payload);
         }
@@ -98,7 +122,7 @@ static int pipe_in_flight(void)
     int count = 0;
 
     portENTER_CRITICAL(&s_pipe_lock);
-    for (int i = 0; i < GMP_OTA_CLIENT_PIPE_DEPTH; i++) {
+    for (int i = 0; i < ESP_GMP_OTA_HOST_PIPE_DEPTH; i++) {
         if (s_pipe[i].active && !s_pipe[i].done) {
             count++;
         }
@@ -116,7 +140,7 @@ static esp_err_t pipe_track(esp_gmp_link_t link, const esp_gmp_tx_params_t *tx, 
     memcpy(copy, pl, pl_len);
 
     portENTER_CRITICAL(&s_pipe_lock);
-    for (int i = 0; i < GMP_OTA_CLIENT_PIPE_DEPTH; i++) {
+    for (int i = 0; i < ESP_GMP_OTA_HOST_PIPE_DEPTH; i++) {
         if (!s_pipe[i].active) {
             s_pipe[i].seq = tx->sequence;
             s_pipe[i].link = link;
@@ -148,7 +172,7 @@ static void pipe_on_response(uint16_t seq, uint8_t status)
     bool signaled = false;
 
     portENTER_CRITICAL(&s_pipe_lock);
-    for (int i = 0; i < GMP_OTA_CLIENT_PIPE_DEPTH; i++) {
+    for (int i = 0; i < ESP_GMP_OTA_HOST_PIPE_DEPTH; i++) {
         if (s_pipe[i].active && !s_pipe[i].done && s_pipe[i].seq == seq) {
             s_pipe[i].status = status;
             s_pipe[i].done = true;
@@ -175,7 +199,7 @@ static esp_err_t pipe_wait_one(uint8_t *out_status)
         }
 
         portENTER_CRITICAL(&s_pipe_lock);
-        for (int i = 0; i < GMP_OTA_CLIENT_PIPE_DEPTH; i++) {
+        for (int i = 0; i < ESP_GMP_OTA_HOST_PIPE_DEPTH; i++) {
             if (s_pipe[i].active && s_pipe[i].done) {
                 uint8_t status = s_pipe[i].status;
                 if (status == ESP_GMP_STATUS_BUSY &&
@@ -211,14 +235,16 @@ static esp_err_t pipe_wait_one(uint8_t *out_status)
     }
 }
 
-static bool gmp_client_on_packet(void *ctx, const esp_gmp_rx_t *p)
+bool esp_gmp_ota_host_on_rsp(const esp_gmp_rx_t *p)
 {
-    (void)ctx;
-    bool ctrl_signaled = false;
-
+    if (!s_inited || !p) {
+        return false;
+    }
     if (p->op != ESP_GMP_OP_WRITE_RSP && p->op != ESP_GMP_OP_READ_RSP) {
         return false;
     }
+
+    bool ctrl_signaled = false;
 
     portENTER_CRITICAL(&s_ctrl_lock);
     if (s_ctrl_wait_active && p->sequence == s_ctrl_wait_seq) {
@@ -233,12 +259,22 @@ static bool gmp_client_on_packet(void *ctx, const esp_gmp_rx_t *p)
     portEXIT_CRITICAL(&s_ctrl_lock);
 
     if (ctrl_signaled) {
-        xSemaphoreGive(s_rsp_sem);
+        if (s_rsp_sem) {
+            xSemaphoreGive(s_rsp_sem);
+        }
         return false;
     }
 
-    pipe_on_response(p->sequence, p->status);
+    /* DATA pipeline responses are GRP_OTA WRITE_RSP */
+    if (p->group_id == ESP_GMP_GRP_OTA) {
+        pipe_on_response(p->sequence, p->status);
+    }
     return false;
+}
+
+static bool host_group_handler(const esp_gmp_rx_t *pkt)
+{
+    return esp_gmp_ota_host_on_rsp(pkt);
 }
 
 static void ctrl_wait_begin(uint16_t seq)
@@ -269,7 +305,17 @@ static esp_err_t wait_ctrl_rsp(uint16_t seq, uint32_t timeout_ms)
             ctrl_wait_cancel();
             return ESP_ERR_INVALID_STATE;
         }
-        TickType_t remain = deadline - xTaskGetTickCount();
+        /* Drain queued GMP TX while waiting (e.g. after CAP occupies a flux slot). */
+        esp_gmp_poll();
+        TickType_t now = xTaskGetTickCount();
+        TickType_t remain = (now < deadline) ? (deadline - now) : 0;
+        TickType_t slice = pdMS_TO_TICKS(20);
+        if (remain > slice) {
+            remain = slice;
+        }
+        if (remain == 0) {
+            break;
+        }
         if (xSemaphoreTake(s_rsp_sem, remain) == pdTRUE) {
             if (s_rsp_status != ESP_GMP_STATUS_OK) {
                 ESP_LOGE(TAG, "GMP status=%02x seq=%u", s_rsp_status, (unsigned)seq);
@@ -317,7 +363,7 @@ static esp_err_t gmp_send_data_pipelined(esp_gmp_link_t link, esp_gmp_tx_params_
     err = esp_gmp_send(link, tx, pl, pl_len);
     if (err != ESP_OK) {
         portENTER_CRITICAL(&s_pipe_lock);
-        for (int i = 0; i < GMP_OTA_CLIENT_PIPE_DEPTH; i++) {
+        for (int i = 0; i < ESP_GMP_OTA_HOST_PIPE_DEPTH; i++) {
             if (s_pipe[i].active && s_pipe[i].seq == tx->sequence) {
                 pipe_clear_slot_locked(i);
                 break;
@@ -334,13 +380,16 @@ static esp_err_t gmp_send_data_pipelined(esp_gmp_link_t link, esp_gmp_tx_params_
 static void send_abort_best_effort(esp_gmp_link_t link, uint16_t *seq, uint8_t session_id)
 {
     uint8_t abort_pl[ESP_GMP_OTA_CTRL_ABORT_ERASE_LEN];
+    esp_gmp_ota_ctrl_req_t abort_req = {
+        .action = ESP_GMP_OTA_CTRL_ACTION_ABORT,
+        .session_id = session_id,
+    };
+    size_t n = esp_gmp_ota_ctrl_build_req(abort_pl, sizeof(abort_pl), &abort_req);
+    if (n == 0) {
+        return;
+    }
 
-    abort_pl[0] = ESP_GMP_OTA_CTRL_ACTION_ABORT;
-    abort_pl[1] = session_id;
-    wr_be16(&abort_pl[2], 0);
-    wr_be32(&abort_pl[4], 0);
-
-    (*seq)++;
+    *seq = host_next_seq();
     esp_gmp_tx_params_t tx = {
         .ver = ESP_GMP_VER,
         .op = ESP_GMP_OP_WRITE_REQ,
@@ -350,13 +399,13 @@ static void send_abort_best_effort(esp_gmp_link_t link, uint16_t *seq, uint8_t s
         .flags = 0,
         .status = 0,
     };
-    (void)esp_gmp_send(link, &tx, abort_pl, sizeof(abort_pl));
+    (void)esp_gmp_send(link, &tx, abort_pl, n);
     esp_gmp_poll();
 }
 
 static esp_err_t upload_fail_cleanup(esp_gmp_link_t link, uint16_t *seq, uint8_t session_id,
                                      esp_gmp_sha256_ctx_t *sha, bool sha_started, uint8_t *data_pl,
-                                     esp_err_t err)
+                                     esp_err_t err, uint64_t transferred, uint64_t total)
 {
     send_abort_best_effort(link, seq, session_id);
     if (sha_started && sha) {
@@ -366,40 +415,159 @@ static esp_err_t upload_fail_cleanup(esp_gmp_link_t link, uint16_t *seq, uint8_t
         free(data_pl);
     }
     pipe_reset();
+    if (s_upload_cancel) {
+        emit_event(ESP_GMP_OTA_EVT_CANCELLED, transferred, total);
+    } else {
+        emit_event(ESP_GMP_OTA_EVT_FAILED, transferred, total);
+    }
     return err;
 }
 
-void gmp_ota_client_install_handler(void)
+static void link_event_trampoline(esp_gmp_link_t link, esp_gmp_link_event_type_t event, esp_err_t err,
+                                  void *ctx)
 {
-    if (!s_rsp_sem) {
-        s_rsp_sem = xSemaphoreCreateBinary();
-    }
-    if (!s_pipe_sem) {
-        s_pipe_sem = xSemaphoreCreateCounting(GMP_OTA_CLIENT_PIPE_DEPTH, 0);
-    }
-    pipe_reset();
-    s_upload_cancel = false;
-    esp_gmp_on_packet_register(gmp_client_on_packet, NULL);
+    (void)ctx;
+    esp_gmp_ota_host_on_link_event(link, event, err);
 }
 
-void gmp_ota_client_request_cancel(void)
+esp_err_t esp_gmp_ota_host_init(const esp_gmp_ota_host_config_t *cfg)
+{
+    if (s_inited) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    memset(&s_cfg, 0, sizeof(s_cfg));
+    if (cfg) {
+        s_cfg = *cfg;
+    }
+
+    if (!s_rsp_sem) {
+        s_rsp_sem = xSemaphoreCreateBinary();
+        if (!s_rsp_sem) {
+            return ESP_ERR_NO_MEM;
+        }
+    }
+    if (!s_pipe_sem) {
+        s_pipe_sem = xSemaphoreCreateCounting(ESP_GMP_OTA_HOST_PIPE_DEPTH, 0);
+        if (!s_pipe_sem) {
+            return ESP_ERR_NO_MEM;
+        }
+    }
+
+    pipe_reset();
+    s_upload_cancel = false;
+    s_registered_ota = false;
+    s_registered_os = false;
+
+    /*
+     * esp_gmp_register_handler allows one slot per group_id (later registration
+     * overwrites). When OTA device is also compiled in, device owns GRP_OTA and
+     * must forward RSP via esp_gmp_ota_host_on_rsp(). Host-only builds register
+     * here.
+     */
+#if !CONFIG_ESP_GMP_OTA_DEVICE
+    esp_err_t err = esp_gmp_register_handler(ESP_GMP_GRP_OTA, host_group_handler, NULL);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to register OTA handler: %s", esp_err_to_name(err));
+        return err;
+    }
+    s_registered_ota = true;
+#endif
+
+    /*
+     * query_caps waits on OS_CAP_QUERY READ_RSP (GRP_OS). When OS profile is
+     * present it owns GRP_OS and must forward RSP to esp_gmp_ota_host_on_rsp().
+     * Otherwise host registers a RSP-only handler for GRP_OS.
+     */
+#if !CONFIG_ESP_GMP_PROFILE_OS
+    {
+        esp_err_t err = esp_gmp_register_handler(ESP_GMP_GRP_OS, host_group_handler, NULL);
+        if (err != ESP_OK) {
+            if (s_registered_ota) {
+                esp_gmp_unregister_handler(ESP_GMP_GRP_OTA);
+                s_registered_ota = false;
+            }
+            ESP_LOGE(TAG, "Failed to register OS RSP handler: %s", esp_err_to_name(err));
+            return err;
+        }
+        s_registered_os = true;
+    }
+#endif
+
+    s_link_sub = esp_gmp_link_event_subscribe(link_event_trampoline, NULL);
+    if (!s_link_sub) {
+        if (s_registered_os) {
+            esp_gmp_unregister_handler(ESP_GMP_GRP_OS);
+            s_registered_os = false;
+        }
+        if (s_registered_ota) {
+            esp_gmp_unregister_handler(ESP_GMP_GRP_OTA);
+            s_registered_ota = false;
+        }
+        return ESP_ERR_NO_MEM;
+    }
+
+    s_inited = true;
+    ESP_LOGI(TAG, "OTA host ready (pipe_depth=%d, own_ota=%d, own_os=%d)",
+             ESP_GMP_OTA_HOST_PIPE_DEPTH, (int)s_registered_ota, (int)s_registered_os);
+    return ESP_OK;
+}
+
+void esp_gmp_ota_host_deinit(void)
+{
+    if (!s_inited) {
+        return;
+    }
+
+    esp_gmp_ota_host_cancel();
+    pipe_reset();
+
+    if (s_link_sub) {
+        esp_gmp_link_event_unsubscribe(s_link_sub);
+        s_link_sub = NULL;
+    }
+
+    if (s_registered_os) {
+        esp_gmp_unregister_handler(ESP_GMP_GRP_OS);
+        s_registered_os = false;
+    }
+    if (s_registered_ota) {
+        esp_gmp_unregister_handler(ESP_GMP_GRP_OTA);
+        s_registered_ota = false;
+    }
+
+    s_inited = false;
+    memset(&s_cfg, 0, sizeof(s_cfg));
+    ESP_LOGI(TAG, "OTA host deinitialized");
+}
+
+void esp_gmp_ota_host_on_link_event(esp_gmp_link_t link, esp_gmp_link_event_type_t ev,
+                                    esp_err_t err)
+{
+    (void)link;
+    (void)err;
+
+    if (!s_inited) {
+        return;
+    }
+
+    if (ev == ESP_GMP_LINK_EVENT_DOWN || ev == ESP_GMP_LINK_EVENT_TRANSPORT_ERROR) {
+        esp_gmp_ota_host_cancel();
+    }
+}
+
+void esp_gmp_ota_host_cancel(void)
 {
     s_upload_cancel = true;
 }
 
-void gmp_ota_client_clear_cancel(void)
+esp_err_t esp_gmp_ota_host_query_caps(esp_gmp_link_t link, esp_gmp_ota_host_caps_t *out)
 {
-    s_upload_cancel = false;
-}
-
-esp_err_t gmp_ota_client_query_caps(esp_gmp_link_t link, gmp_ota_client_caps_t *out)
-{
-    if (!link || !out) {
+    if (!s_inited || !link || !out) {
         return ESP_ERR_INVALID_ARG;
     }
 
-    static uint16_t seq;
-    seq++;
+    uint16_t seq = host_next_seq();
 
     esp_gmp_tx_params_t tx = {
         .ver = ESP_GMP_VER,
@@ -435,33 +603,42 @@ static esp_err_t mem_read_fn(void *ctx, size_t offset, uint8_t *buf, size_t len,
     return ESP_OK;
 }
 
-esp_err_t gmp_ota_client_upload_stream(esp_gmp_link_t link, size_t image_len, gmp_ota_client_read_fn_t read_fn, void *read_ctx)
+esp_err_t esp_gmp_ota_host_upload_stream(esp_gmp_link_t link, size_t image_len,
+                                         esp_gmp_ota_host_read_fn_t read_fn, void *read_ctx)
 {
-    if (!link || !read_fn || image_len == 0) {
+    if (!s_inited || !link || !read_fn || image_len == 0) {
         return ESP_ERR_INVALID_ARG;
     }
 
     pipe_reset();
-    gmp_ota_client_clear_cancel();
+    s_upload_cancel = false;
 
-    gmp_ota_client_caps_t caps;
-    esp_err_t err = gmp_ota_client_query_caps(link, &caps);
+    esp_gmp_ota_host_caps_t caps;
+    esp_err_t err = esp_gmp_ota_host_query_caps(link, &caps);
     if (err != ESP_OK) {
         return err;
     }
 
-    static uint16_t seq;
     uint16_t chunk = caps.chunk_size;
     if (chunk == 0) {
         chunk = ESP_GMP_OTA_FLASH_WRITE_ALIGN;
     }
 
-    seq++;
+    emit_event(ESP_GMP_OTA_EVT_STARTED, 0, image_len);
+
+    uint16_t seq = host_next_seq();
     uint8_t start_pl[ESP_GMP_OTA_CTRL_START_LEN];
-    start_pl[0] = ESP_GMP_OTA_CTRL_ACTION_START;
-    start_pl[1] = 0;
-    wr_be16(&start_pl[2], 0);
-    wr_be32(&start_pl[4], (uint32_t)image_len);
+    esp_gmp_ota_ctrl_req_t start_req = {
+        .action = ESP_GMP_OTA_CTRL_ACTION_START,
+        .session_id = 0,
+        .flags = 0,
+        .image_size = (uint32_t)image_len,
+    };
+    size_t start_n = esp_gmp_ota_ctrl_build_req(start_pl, sizeof(start_pl), &start_req);
+    if (start_n == 0) {
+        emit_event(ESP_GMP_OTA_EVT_FAILED, 0, image_len);
+        return ESP_ERR_INVALID_SIZE;
+    }
 
     esp_gmp_tx_params_t tx = {
         .ver = ESP_GMP_VER,
@@ -473,17 +650,25 @@ esp_err_t gmp_ota_client_upload_stream(esp_gmp_link_t link, size_t image_len, gm
         .status = 0,
     };
 
-    err = gmp_send_and_wait(link, &tx, start_pl, sizeof(start_pl));
+    ESP_LOGI(TAG, "OTA START send seq=%u image=%zu chunk=%u",
+             (unsigned)seq, image_len, (unsigned)chunk);
+    err = gmp_send_and_wait(link, &tx, start_pl, start_n);
     if (err != ESP_OK) {
+        ESP_LOGE(TAG, "OTA START failed: %s", esp_err_to_name(err));
+        emit_event(s_upload_cancel ? ESP_GMP_OTA_EVT_CANCELLED : ESP_GMP_OTA_EVT_FAILED,
+                   0, image_len);
         return err;
     }
+    ESP_LOGI(TAG, "OTA START accepted seq=%u", (unsigned)seq);
 
-    if (s_rsp_payload_len < ESP_GMP_OTA_CTRL_RSP_LEN) {
+    esp_gmp_ota_ctrl_rsp_t start_rsp;
+    if (!esp_gmp_ota_ctrl_parse_rsp(s_rsp_payload, s_rsp_payload_len, &start_rsp)) {
+        emit_event(ESP_GMP_OTA_EVT_FAILED, 0, image_len);
         return ESP_ERR_INVALID_RESPONSE;
     }
 
-    uint8_t session_id = s_rsp_payload[0];
-    uint16_t hint = rd_be16(&s_rsp_payload[1]);
+    uint8_t session_id = start_rsp.session_id;
+    uint16_t hint = start_rsp.chunk_hint;
     if (hint > 0) {
         hint = esp_gmp_ota_align_chunk(hint);
         if (hint < chunk) {
@@ -494,13 +679,13 @@ esp_err_t gmp_ota_client_upload_stream(esp_gmp_link_t link, size_t image_len, gm
 
     uint8_t *data_pl = malloc(ESP_GMP_OTA_DATA_HDR_LEN + chunk);
     if (!data_pl) {
-        return upload_fail_cleanup(link, &seq, session_id, NULL, false, NULL, ESP_ERR_NO_MEM);
+        return upload_fail_cleanup(link, &seq, session_id, NULL, false, NULL, ESP_ERR_NO_MEM, 0, image_len);
     }
 
     esp_gmp_sha256_ctx_t sha;
     err = esp_gmp_sha256_begin(&sha);
     if (err != ESP_OK) {
-        return upload_fail_cleanup(link, &seq, session_id, NULL, false, data_pl, err);
+        return upload_fail_cleanup(link, &seq, session_id, NULL, false, data_pl, err, 0, image_len);
     }
 
     size_t send_offset = 0;
@@ -509,9 +694,10 @@ esp_err_t gmp_ota_client_upload_stream(esp_gmp_link_t link, size_t image_len, gm
 
     while (send_offset < image_len || in_flight > 0) {
         if (s_upload_cancel) {
-            return upload_fail_cleanup(link, &seq, session_id, &sha, true, data_pl, ESP_ERR_INVALID_STATE);
+            return upload_fail_cleanup(link, &seq, session_id, &sha, true, data_pl,
+                                       ESP_ERR_INVALID_STATE, send_offset, image_len);
         }
-        while (send_offset < image_len && in_flight < GMP_OTA_CLIENT_PIPE_DEPTH) {
+        while (send_offset < image_len && in_flight < ESP_GMP_OTA_HOST_PIPE_DEPTH) {
             size_t data_len = image_len - send_offset;
             if (data_len > chunk) {
                 data_len = chunk;
@@ -523,25 +709,36 @@ esp_err_t gmp_ota_client_upload_stream(esp_gmp_link_t link, size_t image_len, gm
                 ESP_LOGE(TAG, "read failed at offset=%zu want=%zu got=%zu",
                          send_offset, data_len, got);
                 return upload_fail_cleanup(link, &seq, session_id, &sha, true, data_pl,
-                                           err != ESP_OK ? err : ESP_FAIL);
+                                           err != ESP_OK ? err : ESP_FAIL, send_offset, image_len);
             }
 
             err = esp_gmp_sha256_update(&sha, &data_pl[ESP_GMP_OTA_DATA_HDR_LEN], data_len);
             if (err != ESP_OK) {
-                return upload_fail_cleanup(link, &seq, session_id, &sha, true, data_pl, err);
+                return upload_fail_cleanup(link, &seq, session_id, &sha, true, data_pl, err,
+                                           send_offset, image_len);
             }
 
-            data_pl[0] = session_id;
-            data_pl[1] = (send_offset + data_len >= image_len) ? ESP_GMP_OTA_DATA_FLAG_LAST_CHUNK : 0;
-            wr_be16(&data_pl[2], (uint16_t)data_len);
-            wr_be32(&data_pl[4], (uint32_t)send_offset);
+            esp_gmp_ota_data_req_t data_req = {
+                .session_id = session_id,
+                .flags = (send_offset + data_len >= image_len) ? ESP_GMP_OTA_DATA_FLAG_LAST_CHUNK : 0,
+                .data_len = (uint16_t)data_len,
+                .image_offset = (uint32_t)send_offset,
+                .data = NULL, /* payload already filled after HDR */
+            };
+            size_t data_n = esp_gmp_ota_data_build_req(data_pl, ESP_GMP_OTA_DATA_HDR_LEN + data_len,
+                                                       &data_req);
+            if (data_n == 0) {
+                return upload_fail_cleanup(link, &seq, session_id, &sha, true, data_pl,
+                                           ESP_ERR_INVALID_SIZE, send_offset, image_len);
+            }
 
-            seq++;
+            seq = host_next_seq();
             tx.sequence = seq;
             tx.command_id = ESP_GMP_OTA_UPLOAD_DATA;
-            err = gmp_send_data_pipelined(link, &tx, data_pl, ESP_GMP_OTA_DATA_HDR_LEN + data_len);
+            err = gmp_send_data_pipelined(link, &tx, data_pl, data_n);
             if (err != ESP_OK) {
-                return upload_fail_cleanup(link, &seq, session_id, &sha, true, data_pl, err);
+                return upload_fail_cleanup(link, &seq, session_id, &sha, true, data_pl, err,
+                                           send_offset, image_len);
             }
 
             send_offset += data_len;
@@ -550,7 +747,8 @@ esp_err_t gmp_ota_client_upload_stream(esp_gmp_link_t link, size_t image_len, gm
 
         err = pipe_wait_one(NULL);
         if (err != ESP_OK) {
-            return upload_fail_cleanup(link, &seq, session_id, &sha, true, data_pl, err);
+            return upload_fail_cleanup(link, &seq, session_id, &sha, true, data_pl, err,
+                                       send_offset, image_len);
         }
 
         in_flight--;
@@ -558,6 +756,7 @@ esp_err_t gmp_ota_client_upload_stream(esp_gmp_link_t link, size_t image_len, gm
         if ((chunks_acked % 16) == 0 || (send_offset == image_len && in_flight == 0)) {
             ESP_LOGI(TAG, "upload pipelined %zu/%zu chunks (in_flight=%d)",
                      chunks_acked, (image_len + chunk - 1) / chunk, in_flight);
+            emit_event(ESP_GMP_OTA_EVT_PROGRESS, send_offset, image_len);
         }
 
         esp_gmp_poll();
@@ -569,32 +768,42 @@ esp_err_t gmp_ota_client_upload_stream(esp_gmp_link_t link, size_t image_len, gm
     uint8_t digest[32];
     err = esp_gmp_sha256_finish(&sha, digest);
     if (err != ESP_OK) {
-        return upload_fail_cleanup(link, &seq, session_id, &sha, true, NULL, err);
+        return upload_fail_cleanup(link, &seq, session_id, &sha, true, NULL, err,
+                                   image_len, image_len);
     }
 
     uint8_t finish_pl[ESP_GMP_OTA_CTRL_FINISH_LEN];
-    finish_pl[0] = ESP_GMP_OTA_CTRL_ACTION_FINISH;
-    finish_pl[1] = session_id;
-    wr_be16(&finish_pl[2], ESP_GMP_OTA_CTRL_FLAG_SHA256);
-    wr_be32(&finish_pl[4], (uint32_t)image_len);
-    memcpy(&finish_pl[8], digest, 32);
+    esp_gmp_ota_ctrl_req_t finish_req = {
+        .action = ESP_GMP_OTA_CTRL_ACTION_FINISH,
+        .session_id = session_id,
+        .flags = ESP_GMP_OTA_CTRL_FLAG_SHA256,
+        .image_size = (uint32_t)image_len,
+        .has_sha256 = true,
+    };
+    memcpy(finish_req.image_sha256, digest, 32);
+    size_t finish_n = esp_gmp_ota_ctrl_build_req(finish_pl, sizeof(finish_pl), &finish_req);
+    if (finish_n == 0) {
+        return upload_fail_cleanup(link, &seq, session_id, NULL, false, NULL,
+                                   ESP_ERR_INVALID_SIZE, image_len, image_len);
+    }
 
-    seq++;
+    seq = host_next_seq();
     tx.sequence = seq;
     tx.command_id = ESP_GMP_OTA_UPLOAD_CONTROL;
-    err = gmp_send_and_wait(link, &tx, finish_pl, sizeof(finish_pl));
+    err = gmp_send_and_wait(link, &tx, finish_pl, finish_n);
     if (err == ESP_OK) {
         ESP_LOGI(TAG, "OTA finish OK — device should reboot");
+        emit_event(ESP_GMP_OTA_EVT_COMPLETED, image_len, image_len);
         return ESP_OK;
     }
-    return upload_fail_cleanup(link, &seq, session_id, NULL, false, NULL, err);
+    return upload_fail_cleanup(link, &seq, session_id, NULL, false, NULL, err, image_len, image_len);
 }
 
-esp_err_t gmp_ota_client_upload(esp_gmp_link_t link, const uint8_t *image, size_t image_len)
+esp_err_t esp_gmp_ota_host_upload(esp_gmp_link_t link, const uint8_t *image, size_t image_len)
 {
     if (!image) {
         return ESP_ERR_INVALID_ARG;
     }
 
-    return gmp_ota_client_upload_stream(link, image_len, mem_read_fn, (void *)image);
+    return esp_gmp_ota_host_upload_stream(link, image_len, mem_read_fn, (void *)image);
 }

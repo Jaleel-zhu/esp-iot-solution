@@ -32,8 +32,9 @@
 #include "flux_gatt_session.h"
 #include "esp_gmp.h"
 #include "esp_gmp_flux.h"
+#include "esp_gmp_os.h"
+#include "esp_gmp_ota_host.h"
 #include "gmp_ble_uuids.h"
-#include "gmp_ota_client.h"
 #include "gmp_session_teardown.h"
 #include "sdkconfig.h"
 
@@ -79,7 +80,7 @@ static esp_err_t setup_gmp_callbacks(gatt_session_t *session)
 
 static esp_err_t setup_gmp_session(gatt_session_t *session)
 {
-    return esp_gmp_flux_link_register(session, session->flux_session);
+    return esp_gmp_flux_link_register(session, gatt_session_get_flux(session));
 }
 
 static void teardown_gmp_session(gatt_session_t *session)
@@ -289,7 +290,7 @@ static void ota_runner_task(void *arg)
     size_t image_len = (size_t)st.st_size;
     ESP_LOGI(TAG, "Streaming firmware from SPIFFS: %zu bytes", image_len);
 
-    esp_err_t err = gmp_ota_client_upload_stream(session, image_len, spiffs_firmware_read, fp);
+    esp_err_t err = esp_gmp_ota_host_upload_stream(session, image_len, spiffs_firmware_read, fp);
     fclose(fp);
 
     if (err == ESP_OK) {
@@ -576,7 +577,7 @@ static void ble_manager_disconnect_cb(ble_manager_t *manager, ble_connection_t *
     portEXIT_CRITICAL(&g_state_lock);
 
     if (session) {
-        gmp_ota_client_request_cancel();
+        esp_gmp_ota_host_cancel();
         if (xTaskCreate(teardown_session_task, "gmp_teardown", 4096, session, 4, NULL) != pdPASS) {
             if (!teardown_pending_push(session)) {
                 ESP_LOGE(TAG, "failed to schedule teardown for conn=%d", conn->conn_handle);
@@ -628,7 +629,9 @@ void app_main(void)
     ESP_ERROR_CHECK(mount_spiffs());
 
     esp_gmp_init();
-    gmp_ota_client_install_handler();
+    /* OS profile owns GRP_OS and forwards CAP READ_RSP to the OTA host waiter. */
+    ESP_ERROR_CHECK(esp_gmp_os_init());
+    ESP_ERROR_CHECK(esp_gmp_ota_host_init(NULL));
 
     ESP_ERROR_CHECK(nimble_port_init());
     nimble_host_config();

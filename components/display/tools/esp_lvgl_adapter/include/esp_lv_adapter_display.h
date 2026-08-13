@@ -280,10 +280,10 @@ typedef struct {
  * frame buffers before registering the display.
  *
  * Buffer count logic:
- * - Rotation 90° or 270°: Always requires 3 buffers (for rotation processing)
+ * - Any non-zero rotation except DOUBLE_PARTIAL: Requires 3 buffers
  * - Triple buffering modes: Requires 3 buffers
- * - Double buffering modes: Requires 2 buffers
- * - Single buffer mode (TEAR_AVOID_MODE_NONE): Returns 1 (minimum required by RGB/MIPI DSI hardware)
+ * - Double buffering modes without rotation, and DOUBLE_PARTIAL: Require 2 buffers
+ * - Unrotated TEAR_AVOID_MODE_NONE: Returns 1 (minimum required by RGB/MIPI DSI hardware)
  *
  * @param[in] tear_avoid_mode Tearing effect avoidance mode
  * @param[in] rotation Display rotation angle

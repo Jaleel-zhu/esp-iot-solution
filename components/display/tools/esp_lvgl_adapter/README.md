@@ -249,8 +249,8 @@ uint8_t num_fbs = esp_lv_adapter_get_required_frame_buffer_count(
 ```
 
 **Frame Buffer Count Rules**:
-- 90°/270° rotation or triple-buffer modes: **3** frame buffers
-- Double-buffer modes: **2** frame buffers
+- Non-zero rotation (except `DOUBLE_PARTIAL`) or triple-buffer modes: **3** frame buffers
+- Double-buffer modes without rotation, and `DOUBLE_PARTIAL`: **2** frame buffers
 - Single-buffer mode: **1** frame buffer
 
 #### Tearing Modes: Selector
@@ -261,8 +261,8 @@ Choose the appropriate tearing mode based on your use case:
 |-------------|----------|---------------|--------|---------------------|
 | `TRIPLE_PARTIAL` | 90°/270° rotation<br>High-res smooth UI | 3 | High | RGB / MIPI DSI |
 | `TRIPLE_FULL` | Full-screen/large-area updates<br>Plenty of RAM | 3 | High | RGB / MIPI DSI |
-| `DOUBLE_FULL` | Large-area updates<br>Tighter RAM | 2 | Medium | RGB / MIPI DSI |
-| `DOUBLE_DIRECT` | Small-area updates<br>Widget/UI deltas | 2 | Medium | RGB / MIPI DSI |
+| `DOUBLE_FULL` | Large-area updates<br>Tighter RAM | 2, or 3 with rotation | Medium / High | RGB / MIPI DSI |
+| `DOUBLE_DIRECT` | Small-area updates<br>Widget/UI deltas | 2, or 3 with rotation | Medium / High | RGB / MIPI DSI |
 | `TE_SYNC` | SPI/I2C/I80/QSPI interfaces<br>Panel provides TE signal, syncs with vertical blanking to eliminate tearing | 1 | Low | SPI / I2C / I80 / QSPI |
 | `NONE` | Static UI<br>Ultra-low RAM | 1 | Low | All interfaces |
 

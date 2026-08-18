@@ -22,6 +22,8 @@ dependencies:
     version: "1.*"
   espressif/esp_new_jpeg:
     version: 1.*
+  espressif/qoi:
+    version: "^0.20260529.0"
   lvgl/lvgl:
     version: ">=8,<10"
 sbom:

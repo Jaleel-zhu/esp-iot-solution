@@ -5,7 +5,6 @@ endif()
 
 idf_component_register(
     INCLUDE_DIRS "include"
-    PRIV_INCLUDE_DIRS "priv_include"
     PRIV_REQUIRES ${PRIV_REQUIRES_LIST}
 )
 
@@ -52,6 +51,13 @@ if("libpng" IN_LIST build_components)
     list(APPEND ADD_LIBS idf::libpng)
 endif()
 
+if("espressif__qoi" IN_LIST build_components)
+    list(APPEND ADD_LIBS idf::espressif__qoi)
+endif()
+if("qoi" IN_LIST build_components)
+    list(APPEND ADD_LIBS idf::qoi)
+endif()
+
 if(IDF_TARGET STREQUAL "esp32p4" OR IDF_TARGET STREQUAL "esp32s31")
     list(APPEND ADD_LIBS idf::esp_driver_jpeg)
 endif()
@@ -62,7 +68,6 @@ add_library(lvgl_docoder_lib STATIC
     ${ADD_SRCS}
     )
 target_include_directories(lvgl_docoder_lib PUBLIC "include")
-target_include_directories(lvgl_docoder_lib PRIVATE "priv_include")
 target_link_libraries(lvgl_docoder_lib PUBLIC
     idf::${lvgl_name}
     )

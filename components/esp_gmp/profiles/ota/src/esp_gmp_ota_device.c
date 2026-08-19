@@ -23,6 +23,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#if CONFIG_ESP_GMP_PROFILE_OS
+#include "esp_gmp_os.h"
+#endif
+
 static const char *TAG = "esp_gmp_ota";
 
 #define OTA_DATA_HOLD_SLOTS 2
@@ -132,6 +136,11 @@ typedef struct {
     char ota_partition_label[17];
     uint16_t chunk_hint;
     uint32_t restart_delay_ms;
+    esp_gmp_ota_apply_policy_t apply_policy;
+    esp_gmp_ota_accept_cb_t accept_cb;
+    void *accept_ctx;
+    esp_gmp_ota_event_cb_t event_cb;
+    void *event_ctx;
 } ota_cfg_t;
 
 static ota_cfg_t s_cfg;
@@ -139,8 +148,33 @@ static ota_sess_t s_sess[CONFIG_ESP_GMP_MAX_LINKS];
 static QueueHandle_t s_rx_queue;
 static TaskHandle_t s_rx_task;
 static bool s_inited;
+static bool s_manual_apply_pending;
 static uint8_t s_next_sid = 1;
 static portMUX_TYPE s_sid_mux = portMUX_INITIALIZER_UNLOCKED;
+static esp_gmp_link_event_sub_t s_link_sub;
+
+static void ota_emit(uint8_t event_id, uint64_t transferred, uint64_t total, uint16_t reason,
+                     esp_err_t detail)
+{
+    if (!s_cfg.event_cb) {
+        return;
+    }
+    uint8_t percent = total == 0 ? 0 : (uint8_t)((transferred * 100) / total);
+    if (percent > 100) {
+        percent = 100;
+    }
+    esp_gmp_profile_event_t ev = {
+        .event_id = event_id,
+        .role = ESP_GMP_OTA_ROLE_DEVICE,
+        .transferred = transferred,
+        .total = total,
+        .percent = percent,
+        .reason = reason,
+        .detail = detail,
+        .profile_extra = NULL,
+    };
+    s_cfg.event_cb(&ev, s_cfg.event_ctx);
+}
 
 static uint8_t ota_alloc_session_id(void)
 {
@@ -329,12 +363,19 @@ static esp_err_t send_write_rsp(esp_gmp_link_t link, uint16_t seq, uint8_t cmd, 
 
 static bool ota_finish_reply_status(ota_sess_t *s, esp_gmp_link_t link, uint16_t seq, uint8_t cmd, uint8_t status, const uint8_t *sha256)
 {
+    uint32_t transferred = 0;
+    uint32_t total = 0;
     if (xSemaphoreTake(s->lock, portMAX_DELAY) == pdTRUE) {
         sess_set_finish_result(s, status, sha256);
         s->finish_pending = false;
+        transferred = s->bytes_written;
+        total = s->image_size;
         xSemaphoreGive(s->lock);
     }
     (void)send_write_rsp(link, seq, cmd, status, NULL, 0);
+    if (status != ESP_GMP_STATUS_OK) {
+        ota_emit(ESP_GMP_OTA_EVT_FAILED, transferred, total, status, ESP_FAIL);
+    }
     return false;
 }
 
@@ -542,8 +583,15 @@ static bool ota_worker_drain_one(ota_sess_t *s, RingbufHandle_t rb, TickType_t w
             } else {
                 s->queued_bytes = 0;
             }
+            uint32_t written = s->bytes_written;
+            uint32_t total = s->image_size;
+            xSemaphoreGive(s->lock);
+            if ((written & 0xFFFF) == 0 || written == total) {
+                ota_emit(ESP_GMP_OTA_EVT_PROGRESS, written, total, 0, ESP_OK);
+            }
+        } else {
+            xSemaphoreGive(s->lock);
         }
-        xSemaphoreGive(s->lock);
     }
 
     free(frame_buf);
@@ -622,6 +670,8 @@ static bool ota_worker_try_finish(ota_sess_t *s, RingbufHandle_t rb)
         xSemaphoreGive(s->lock);
     }
 
+    ota_emit(ESP_GMP_OTA_EVT_VERIFYING, written, expected, 0, ESP_OK);
+
     if (memcmp(digest, expect_sha256, 32) != 0) {
         if (handle) {
             esp_ota_abort(handle);
@@ -658,10 +708,17 @@ static bool ota_worker_try_finish(ota_sess_t *s, RingbufHandle_t rb)
                                        ESP_GMP_STATUS_BAD_STATE, expect_sha256);
     }
 
-    err = schedule_restart(s_cfg.restart_delay_ms, &restart);
-    if (err != ESP_OK) {
-        return ota_finish_reply_status(s, link, finish_seq, finish_cmd,
-                                       ESP_GMP_STATUS_INTERNAL, expect_sha256);
+    uint32_t delay_ms = s_cfg.restart_delay_ms;
+    if (s_cfg.apply_policy == ESP_GMP_OTA_APPLY_RESTART_IMMEDIATE) {
+        delay_ms = 0;
+    }
+
+    if (s_cfg.apply_policy != ESP_GMP_OTA_APPLY_MANUAL) {
+        err = schedule_restart(delay_ms, &restart);
+        if (err != ESP_OK) {
+            return ota_finish_reply_status(s, link, finish_seq, finish_cmd,
+                                           ESP_GMP_STATUS_INTERNAL, expect_sha256);
+        }
     }
 
     err = esp_ota_set_boot_partition(part);
@@ -680,8 +737,19 @@ static bool ota_worker_try_finish(ota_sess_t *s, RingbufHandle_t rb)
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "send finish OK response failed: %s", esp_err_to_name(err));
     }
-    ESP_LOGI(TAG, "OTA OK, restart in %" PRIu32 " ms", s_cfg.restart_delay_ms);
-    trigger_restart(restart);
+
+    if (s_cfg.apply_policy == ESP_GMP_OTA_APPLY_MANUAL) {
+        s_manual_apply_pending = true;
+    }
+
+    ota_emit(ESP_GMP_OTA_EVT_COMPLETED, s->image_size, s->image_size, 0, ESP_OK);
+
+    if (s_cfg.apply_policy == ESP_GMP_OTA_APPLY_MANUAL) {
+        ESP_LOGI(TAG, "OTA OK, waiting for esp_gmp_ota_apply()");
+    } else {
+        ESP_LOGI(TAG, "OTA OK, restart in %" PRIu32 " ms", delay_ms);
+        trigger_restart(restart);
+    }
     return true;
 }
 
@@ -789,7 +857,8 @@ static esp_err_t ota_enqueue_data_chunk(ota_sess_t *s, uint32_t image_offset, ui
     return ESP_OK;
 }
 
-static esp_err_t handle_control(const esp_gmp_rx_t *pkt, ota_sess_t *s, ota_pending_rsp_t *rsp)
+static esp_err_t handle_control(const esp_gmp_rx_t *pkt, ota_sess_t *s, ota_pending_rsp_t *rsp,
+                                bool *emit_started, uint64_t *started_total)
 {
     esp_gmp_ota_ctrl_req_t req;
     if (!esp_gmp_ota_ctrl_parse_req(pkt->payload, pkt->payload_len, &req)) {
@@ -809,13 +878,24 @@ static esp_err_t handle_control(const esp_gmp_rx_t *pkt, ota_sess_t *s, ota_pend
                                      ESP_GMP_STATUS_BAD_LENGTH, NULL, 0);
         }
 
+        if (s_cfg.accept_cb &&
+                !s_cfg.accept_cb(req.image_size, s_cfg.accept_ctx)) {
+            return pending_write_rsp(rsp, pkt->link, pkt->sequence, pkt->command_id,
+                                     ESP_GMP_STATUS_NOT_SUPPORTED, NULL, 0);
+        }
+
         const esp_partition_t *part = ota_partition_resolve();
         if (!part || req.image_size > part->size) {
             return pending_write_rsp(rsp, pkt->link, pkt->sequence, pkt->command_id,
                                      ESP_GMP_STATUS_BAD_LENGTH, NULL, 0);
         }
 
-        esp_err_t err = esp_ota_begin(part, req.image_size, &s->ota_handle);
+        /*
+         * Erase incrementally during writes. Passing image_size here would
+         * erase the whole image synchronously and block the START response
+         * (host control timeout is 40s; ~600KB+ erase often exceeds that).
+         */
+        esp_err_t err = esp_ota_begin(part, OTA_WITH_SEQUENTIAL_WRITES, &s->ota_handle);
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "esp_ota_begin failed: %s", esp_err_to_name(err));
             return pending_write_rsp(rsp, pkt->link, pkt->sequence, pkt->command_id,
@@ -875,6 +955,12 @@ static esp_err_t handle_control(const esp_gmp_rx_t *pkt, ota_sess_t *s, ota_pend
         size_t n = esp_gmp_ota_ctrl_build_start_rsp(pl, sizeof(pl), &crsp);
         ESP_LOGI(TAG, "OTA START async worker rb=%u B (%u slots)",
                  (unsigned)ota_ringbuf_bytes(), (unsigned)CONFIG_ESP_GMP_OTA_RINGBUF_SLOTS);
+        if (emit_started) {
+            *emit_started = true;
+        }
+        if (started_total) {
+            *started_total = req.image_size;
+        }
         return pending_write_rsp(rsp, pkt->link, pkt->sequence, pkt->command_id,
                                  ESP_GMP_STATUS_OK, pl, n);
     }
@@ -1272,6 +1358,39 @@ static esp_err_t handle_query(const esp_gmp_rx_t *pkt, ota_sess_t *s, ota_pendin
                             ESP_GMP_STATUS_OK, pl, n);
 }
 
+static bool ota_device_handler(const esp_gmp_rx_t *pkt)
+{
+    return esp_gmp_ota_on_packet(pkt);
+}
+
+static void ota_link_event_handler(esp_gmp_link_t link, esp_gmp_link_event_type_t event,
+                                   esp_err_t error, void *ctx)
+{
+    (void)error;
+    (void)ctx;
+    if (event == ESP_GMP_LINK_EVENT_DOWN || event == ESP_GMP_LINK_EVENT_TRANSPORT_ERROR) {
+        esp_gmp_ota_on_link_down(link);
+    }
+}
+
+static void ota_rx_teardown(void)
+{
+    ota_rx_queue_drain_all();
+    if (s_rx_task && s_rx_queue) {
+        ota_rx_msg_t stop = {
+            .stop = true,
+        };
+        (void)xQueueSend(s_rx_queue, &stop, portMAX_DELAY);
+        while (s_rx_task) {
+            vTaskDelay(pdMS_TO_TICKS(10));
+        }
+    }
+    if (s_rx_queue) {
+        vQueueDelete(s_rx_queue);
+        s_rx_queue = NULL;
+    }
+}
+
 esp_err_t esp_gmp_ota_init(const esp_gmp_ota_config_t *cfg)
 {
     if (s_inited) {
@@ -1281,6 +1400,8 @@ esp_err_t esp_gmp_ota_init(const esp_gmp_ota_config_t *cfg)
     memset(&s_cfg, 0, sizeof(s_cfg));
     s_cfg.chunk_hint = (uint16_t)CONFIG_ESP_GMP_OTA_CHUNK_HINT;
     s_cfg.restart_delay_ms = (uint32_t)CONFIG_ESP_GMP_OTA_RESTART_DELAY_MS;
+    s_cfg.apply_policy = ESP_GMP_OTA_APPLY_RESTART_DELAYED;
+    s_manual_apply_pending = false;
 
     if (cfg) {
         if (cfg->ota_partition_label) {
@@ -1293,6 +1414,11 @@ esp_err_t esp_gmp_ota_init(const esp_gmp_ota_config_t *cfg)
         if (cfg->restart_delay_ms > 0) {
             s_cfg.restart_delay_ms = cfg->restart_delay_ms;
         }
+        s_cfg.apply_policy = cfg->apply_policy;
+        s_cfg.accept_cb = cfg->accept_cb;
+        s_cfg.accept_ctx = cfg->accept_ctx;
+        s_cfg.event_cb = cfg->event_cb;
+        s_cfg.event_ctx = cfg->event_ctx;
     }
 
     memset(s_sess, 0, sizeof(s_sess));
@@ -1315,6 +1441,23 @@ esp_err_t esp_gmp_ota_init(const esp_gmp_ota_config_t *cfg)
         }
     }
 
+    esp_err_t err = esp_gmp_register_handler(ESP_GMP_GRP_OTA, ota_device_handler);
+    if (err != ESP_OK) {
+        ota_rx_teardown();
+        return err;
+    }
+
+    s_link_sub = esp_gmp_link_event_subscribe(ota_link_event_handler, NULL);
+    if (!s_link_sub) {
+        esp_gmp_unregister_handler(ESP_GMP_GRP_OTA, ota_device_handler);
+        ota_rx_teardown();
+        return ESP_ERR_NO_MEM;
+    }
+
+#if CONFIG_ESP_GMP_PROFILE_OS
+    esp_gmp_os_register_capability(ESP_GMP_OS_CAP_OTA_SUPPORTED);
+#endif
+
     s_inited = true;
     ESP_LOGI(TAG, "OTA handler ready (async RX + flash worker)");
     return ESP_OK;
@@ -1322,18 +1465,20 @@ esp_err_t esp_gmp_ota_init(const esp_gmp_ota_config_t *cfg)
 
 void esp_gmp_ota_deinit(void)
 {
+#if CONFIG_ESP_GMP_PROFILE_OS
+    esp_gmp_os_unregister_capability(ESP_GMP_OS_CAP_OTA_SUPPORTED);
+#endif
+
+    if (s_link_sub) {
+        esp_gmp_link_event_unsubscribe(s_link_sub);
+        s_link_sub = NULL;
+    }
+
+    esp_gmp_unregister_handler(ESP_GMP_GRP_OTA, ota_device_handler);
+
     s_inited = false;
 
-    ota_rx_queue_drain_all();
-    if (s_rx_task && s_rx_queue) {
-        ota_rx_msg_t stop = {
-            .stop = true,
-        };
-        (void)xQueueSend(s_rx_queue, &stop, portMAX_DELAY);
-        while (s_rx_task) {
-            vTaskDelay(pdMS_TO_TICKS(10));
-        }
-    }
+    ota_rx_teardown();
 
     for (int i = 0; i < CONFIG_ESP_GMP_MAX_LINKS; i++) {
         if (s_sess[i].used) {
@@ -1344,16 +1489,16 @@ void esp_gmp_ota_deinit(void)
         }
         memset(&s_sess[i], 0, sizeof(s_sess[i]));
     }
-
-    if (s_rx_queue) {
-        vQueueDelete(s_rx_queue);
-        s_rx_queue = NULL;
-    }
 }
 
 bool esp_gmp_ota_on_packet(const esp_gmp_rx_t *pkt)
 {
     if (!s_inited || !pkt || pkt->group_id != ESP_GMP_GRP_OTA) {
+        return false;
+    }
+
+    /* Host co-registers for GRP_OTA RSPs; device only consumes requests. */
+    if (pkt->op == ESP_GMP_OP_WRITE_RSP || pkt->op == ESP_GMP_OP_READ_RSP) {
         return false;
     }
 
@@ -1407,6 +1552,8 @@ bool esp_gmp_ota_on_packet(const esp_gmp_rx_t *pkt)
 
     esp_err_t err = ESP_ERR_NOT_SUPPORTED;
     ota_pending_rsp_t rsp = { 0 };
+    bool emit_started = false;
+    uint64_t started_total = 0;
     if (s->closing) {
         if (pkt->op == ESP_GMP_OP_READ_REQ) {
             err = pending_read_rsp(&rsp, pkt->link, pkt->sequence, pkt->command_id,
@@ -1417,13 +1564,18 @@ bool esp_gmp_ota_on_packet(const esp_gmp_rx_t *pkt)
         }
     } else if (pkt->command_id == ESP_GMP_OTA_UPLOAD_CONTROL &&
                pkt->op == ESP_GMP_OP_WRITE_REQ) {
-        err = handle_control(pkt, s, &rsp);
+        ESP_LOGI(TAG, "OTA CONTROL req seq=%u len=%u",
+                 (unsigned)pkt->sequence, (unsigned)pkt->payload_len);
+        err = handle_control(pkt, s, &rsp, &emit_started, &started_total);
     } else if (pkt->command_id == ESP_GMP_OTA_UPLOAD_QUERY &&
                pkt->op == ESP_GMP_OP_READ_REQ) {
         err = handle_query(pkt, s, &rsp);
     }
 
     xSemaphoreGive(s->lock);
+    if (emit_started) {
+        ota_emit(ESP_GMP_OTA_EVT_STARTED, 0, started_total, 0, ESP_OK);
+    }
     if (rsp.valid) {
         (void)pending_rsp_send(&rsp);
     }
@@ -1460,4 +1612,56 @@ void esp_gmp_ota_on_link_down(esp_gmp_link_t link)
     }
 
     ota_rx_queue_drain_link(link);
+}
+
+esp_err_t esp_gmp_ota_get_status(esp_gmp_link_t link, esp_gmp_ota_status_t *status)
+{
+    if (!status) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!s_inited) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    memset(status, 0, sizeof(*status));
+
+    ota_sess_t *s = NULL;
+    if (link) {
+        s = sess_find(link);
+    } else {
+        for (int i = 0; i < CONFIG_ESP_GMP_MAX_LINKS; i++) {
+            if (s_sess[i].used && s_sess[i].state != OTA_SESS_IDLE) {
+                s = &s_sess[i];
+                break;
+            }
+        }
+    }
+    if (!s) {
+        return ESP_OK;
+    }
+
+    if (xSemaphoreTake(s->lock, portMAX_DELAY) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+    status->in_progress = (s->state == OTA_SESS_RECEIVING || s->state == OTA_SESS_APPLYING);
+    status->link = s->link;
+    status->session_id = s->session_id;
+    status->transferred = s->bytes_written;
+    status->total = s->image_size;
+    status->percent = status->total == 0 ? 0
+                      : (uint8_t)((status->transferred * 100) / status->total);
+    if (status->percent > 100) {
+        status->percent = 100;
+    }
+    xSemaphoreGive(s->lock);
+    return ESP_OK;
+}
+
+esp_err_t esp_gmp_ota_apply(void)
+{
+    if (!s_inited || !s_manual_apply_pending) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    s_manual_apply_pending = false;
+    esp_restart();
+    return ESP_OK;
 }

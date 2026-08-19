@@ -692,6 +692,22 @@ build_components_esp_gmp_test:
   variables:
     EXAMPLE_DIR: components/esp_gmp/test
 
+build_example_esp_gmp_file_transfer_sender:
+  extends:
+    - .build_examples_template
+    - .rules:build:example_esp_gmp_file_transfer_sender
+    - .build_idf_active_release_version
+  variables:
+    EXAMPLE_DIR: examples/esp_file_transfer/sender_demo
+
+build_example_esp_gmp_file_transfer_receiver:
+  extends:
+    - .build_examples_template
+    - .rules:build:example_esp_gmp_file_transfer_receiver
+    - .build_idf_active_release_version
+  variables:
+    EXAMPLE_DIR: examples/esp_file_transfer/receiver_demo
+
 build_example_get_started_blink:
   extends:
     - .build_examples_template

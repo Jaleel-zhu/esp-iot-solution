@@ -671,6 +671,12 @@ static int ble_manager_gap_event(struct ble_gap_event *event, void *arg)
 
     case BLE_GAP_EVENT_DISC_COMPLETE:
         ESP_LOGI(TAG, "discovery complete; reason=%d\n", event->disc_complete.reason);
+        if (g_ble_manager &&
+                (event->disc_complete.reason == 0 ||
+                 event->disc_complete.reason == BLE_HS_ETIMEOUT)) {
+            g_ble_manager->scanning = false;
+            ESP_LOGI(TAG, "scan stopped");
+        }
         /* Handle scan results */
         if (g_ble_manager && g_ble_manager->callbacks.ble_scan_cb) {
             g_ble_manager->callbacks.ble_scan_cb(g_ble_manager, event->type, NULL, g_ble_manager->callbacks.arg);

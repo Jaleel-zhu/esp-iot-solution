@@ -54,7 +54,7 @@ Client 示例默认挂载 SPIFFS 时不会自动格式化失败分区（`format_
 
 ## 组件 API
 
-设备侧 OTA 处理器：`esp_gmp_ota_init()` / `esp_gmp_ota_on_packet()`（见 `components/esp_gmp/ota/`）。
+设备侧 OTA 处理器：`esp_gmp_ota_init()`（见 `components/esp_gmp/profiles/ota/`）。
 
 协议：[`SPEC.md`](../../../components/esp_gmp/SPEC.md)。
 

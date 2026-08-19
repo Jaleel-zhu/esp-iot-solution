@@ -54,7 +54,7 @@ The client example does not auto-format a failed SPIFFS mount (`format_if_mount_
 
 ## Component API
 
-Device-side OTA handler: `esp_gmp_ota_init()` / `esp_gmp_ota_on_packet()` (see `components/esp_gmp/ota/`).
+Device-side OTA handler: `esp_gmp_ota_init()` (see `components/esp_gmp/profiles/ota/`).
 
 Protocol: [`SPEC.md`](../../../components/esp_gmp/SPEC.md).
 

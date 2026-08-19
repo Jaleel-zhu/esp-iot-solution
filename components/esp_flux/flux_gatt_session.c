@@ -429,6 +429,9 @@ static void ble_feed_data_from_mbuf(uint16_t conn_handle, struct os_mbuf *om, ui
     gatt_session_t *session = gatt_session_find_by_handle_pinned(conn_handle);
     if (!session || !session->flux_session) {
         ESP_LOGW(TAG, "No session for conn_handle=%d", conn_handle);
+        if (session) {
+            gatt_session_callback_leave(session);
+        }
         return;
     }
 
@@ -462,6 +465,9 @@ static int gatt_session_gap_event(struct ble_gap_event *event, void *arg)
                 flux_session_set_mtu(session->flux_session, event->mtu.value);
             }
             ESP_LOGI(TAG, "MTU updated: %d (conn_handle=%d)", event->mtu.value, event->mtu.conn_handle);
+            if (session->callbacks.mtu_changed_cb) {
+                session->callbacks.mtu_changed_cb(session, event->mtu.value);
+            }
             gatt_session_callback_leave(session);
         }
         return 0;
@@ -630,11 +636,6 @@ esp_err_t gatt_session_destroy(gatt_session_t *session)
         return ESP_ERR_INVALID_ARG;
     }
 
-    if (session->flux_session) {
-        flux_session_destroy(session->flux_session);
-        session->flux_session = NULL;
-    }
-
     xSemaphoreTake(g_gatt_sessions_mutex, portMAX_DELAY);
     session->destroying = true;
     // Remove from global session list
@@ -672,6 +673,7 @@ esp_err_t gatt_session_destroy(gatt_session_t *session)
     }
     xSemaphoreGive(g_gatt_sessions_mutex);
 
+    /* Wait for in-flight GAP/feed callbacks before tearing down Flux. */
     while (true) {
         uint16_t callback_inflight = 0;
         if (g_gatt_sessions_mutex) {
@@ -685,6 +687,11 @@ esp_err_t gatt_session_destroy(gatt_session_t *session)
             break;
         }
         vTaskDelay(pdMS_TO_TICKS(1));
+    }
+
+    if (session->flux_session) {
+        flux_session_destroy(session->flux_session);
+        session->flux_session = NULL;
     }
 
     free(session);
@@ -737,12 +744,25 @@ esp_err_t gatt_session_set_mtu(gatt_session_t *session, uint16_t mtu)
         ret = flux_session_set_mtu(session->flux_session, mtu);
     }
 
+    if (ret == ESP_OK && session->callbacks.mtu_changed_cb) {
+        bool pinned = false;
+        if (g_gatt_sessions_mutex) {
+            xSemaphoreTake(g_gatt_sessions_mutex, portMAX_DELAY);
+            pinned = gatt_session_callback_pin_locked(session);
+            xSemaphoreGive(g_gatt_sessions_mutex);
+        }
+        if (pinned) {
+            session->callbacks.mtu_changed_cb(session, mtu);
+            gatt_session_callback_leave(session);
+        }
+    }
+
     return ret;
 }
 
-/* ────────────────────── Send API Delegates ────────────────────── */
-esp_err_t gatt_session_fragment_send(gatt_session_t *session, const uint8_t *data,
-                                     uint32_t size, uint8_t window_size, uint8_t window_threshold_percent)
+/* ────────────────────── Send / recv API (delegates to flux_session) ────────────────────── */
+esp_err_t gatt_session_send(gatt_session_t *session, const uint8_t *data,
+                            uint32_t size, uint8_t window_size, uint8_t window_threshold_percent)
 {
     if (!session || !session->flux_session) {
         return ESP_ERR_INVALID_ARG;
@@ -751,7 +771,7 @@ esp_err_t gatt_session_fragment_send(gatt_session_t *session, const uint8_t *dat
     return flux_session_send(session->flux_session, data, size, window_size, window_threshold_percent);
 }
 
-bool gatt_session_fragment_send_idle(gatt_session_t *session)
+bool gatt_session_send_idle(gatt_session_t *session)
 {
     if (!session || !session->flux_session) {
         return false;
@@ -760,7 +780,7 @@ bool gatt_session_fragment_send_idle(gatt_session_t *session)
     return flux_session_send_idle(session->flux_session);
 }
 
-bool gatt_session_fragment_send_is_complete(gatt_session_t *session, uint8_t stream_id)
+bool gatt_session_send_is_complete(gatt_session_t *session, uint8_t stream_id)
 {
     if (!session || !session->flux_session) {
         return false;
@@ -769,16 +789,16 @@ bool gatt_session_fragment_send_is_complete(gatt_session_t *session, uint8_t str
     return flux_session_send_is_complete(session->flux_session, stream_id);
 }
 
-uint8_t gatt_session_fragment_send_get_progress(gatt_session_t *session, uint8_t stream_id)
+uint8_t gatt_session_send_get_progress(gatt_session_t *session, uint8_t stream_id)
 {
     if (!session || !session->flux_session) {
-        return false;
+        return 0;
     }
 
     return flux_session_send_get_progress(session->flux_session, stream_id);
 }
 
-esp_err_t gatt_session_fragment_send_reset(gatt_session_t *session, uint8_t stream_id)
+esp_err_t gatt_session_send_reset(gatt_session_t *session, uint8_t stream_id)
 {
     if (!session || !session->flux_session) {
         return ESP_ERR_INVALID_ARG;
@@ -787,8 +807,7 @@ esp_err_t gatt_session_fragment_send_reset(gatt_session_t *session, uint8_t stre
     return flux_session_send_reset(session->flux_session, stream_id);
 }
 
-/* ────────────────────── Recv State API Delegates ────────────────────── */
-bool gatt_session_fragment_recv_idle(gatt_session_t *session)
+bool gatt_session_recv_idle(gatt_session_t *session)
 {
     if (!session || !session->flux_session) {
         return false;
@@ -797,7 +816,7 @@ bool gatt_session_fragment_recv_idle(gatt_session_t *session)
     return flux_session_recv_idle(session->flux_session);
 }
 
-bool gatt_session_fragment_recv_is_complete(gatt_session_t *session, uint8_t stream_id)
+bool gatt_session_recv_is_complete(gatt_session_t *session, uint8_t stream_id)
 {
     if (!session || !session->flux_session) {
         return false;
@@ -806,7 +825,7 @@ bool gatt_session_fragment_recv_is_complete(gatt_session_t *session, uint8_t str
     return flux_session_recv_is_complete(session->flux_session, stream_id);
 }
 
-uint8_t gatt_session_fragment_recv_get_progress(gatt_session_t *session, uint8_t stream_id)
+uint8_t gatt_session_recv_get_progress(gatt_session_t *session, uint8_t stream_id)
 {
     if (!session || !session->flux_session) {
         return 0;
@@ -815,11 +834,21 @@ uint8_t gatt_session_fragment_recv_get_progress(gatt_session_t *session, uint8_t
     return flux_session_recv_get_progress(session->flux_session, stream_id);
 }
 
-esp_err_t gatt_session_fragment_recv_reset(gatt_session_t *session, uint8_t stream_id)
+esp_err_t gatt_session_recv_reset(gatt_session_t *session, uint8_t stream_id)
 {
     if (!session || !session->flux_session) {
         return ESP_ERR_INVALID_ARG;
     }
 
     return flux_session_recv_reset(session->flux_session, stream_id);
+}
+
+flux_session_t *gatt_session_get_flux(const gatt_session_t *session)
+{
+    return session ? session->flux_session : NULL;
+}
+
+uint16_t gatt_session_get_mtu(const gatt_session_t *session)
+{
+    return session ? session->mtu_size : 0;
 }

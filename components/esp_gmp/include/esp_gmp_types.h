@@ -57,6 +57,18 @@ typedef struct {
 /** Return true to take ownership of rx->frame_buf. */
 typedef bool (*esp_gmp_on_packet_fn)(void *user_ctx, const esp_gmp_rx_t *pkt);
 
+/** Base for esp_gmp-specific esp_err_t values. */
+#define ESP_ERR_ESP_GMP_BASE 0x7600
+
+/**
+ * TX queue for this link is full; the frame was not queued.
+ *
+ * This is transient backpressure: the link is alive and the caller may retry
+ * after in-flight frames complete. Distinct from ESP_ERR_INVALID_STATE, which
+ * means the link is unregistered or closing and retrying will never succeed.
+ */
+#define ESP_ERR_ESP_GMP_TX_QUEUE_FULL (ESP_ERR_ESP_GMP_BASE + 0x01)
+
 #define ESP_GMP_VER_SHIFT 4
 #define ESP_GMP_VER       0x01
 
@@ -65,8 +77,9 @@ typedef bool (*esp_gmp_on_packet_fn)(void *user_ctx, const esp_gmp_rx_t *pkt);
 #define ESP_GMP_OP_WRITE_REQ  0x02
 #define ESP_GMP_OP_WRITE_RSP  0x03
 
-#define ESP_GMP_GRP_OS  0x00
-#define ESP_GMP_GRP_OTA 0x01
+#define ESP_GMP_GRP_OS            0x00
+#define ESP_GMP_GRP_OTA           0x01
+#define ESP_GMP_GRP_FILE_TRANSFER 0x08
 
 #define ESP_GMP_OS_CAP_QUERY       0x01
 #define ESP_GMP_OTA_UPLOAD_DATA    0x01

@@ -13,6 +13,7 @@
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
 #include "esp_flux_transport.h"
+#include "esp_flux_session_priv.h"
 #include "sys/queue.h"
 
 /* ────────────────────── Internal Packet Structures ────────────────────── */
@@ -2134,6 +2135,32 @@ esp_err_t flux_session_set_mtu(flux_session_t *session, uint16_t mtu)
     flux_update_mtu_sizes(session);
     flux_session_state_unlock(session);
     return ESP_OK;
+}
+
+uint16_t flux_session_get_mtu(const flux_session_t *session)
+{
+    return session ? session->mtu_size : 0;
+}
+
+uint32_t flux_session_get_id(const flux_session_t *session)
+{
+    return session ? session->id : 0;
+}
+
+void *flux_session_get_user_arg(const flux_session_t *session)
+{
+    return session ? session->callbacks.arg : NULL;
+}
+
+size_t flux_session_max_message_bytes(const flux_session_t *session)
+{
+    if (!session || session->max_start_data_size == 0) {
+        return 0;
+    }
+    size_t result = (size_t)session->max_start_data_size +
+                    (size_t)(FLUX_MAX_FRAGMENTS - 1) * (size_t)session->max_fragment_data_size;
+    /* Receiver rejects total_size > FLUX_MAX_REASSEMBLY_SIZE; never advertise more. */
+    return (result > FLUX_MAX_REASSEMBLY_SIZE) ? FLUX_MAX_REASSEMBLY_SIZE : result;
 }
 
 /* ────────────────────── Public: Send ────────────────────── */

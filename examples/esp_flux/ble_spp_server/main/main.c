@@ -91,7 +91,7 @@ static void gatt_session_complete_cb(gatt_session_t *session, uint8_t stream_id,
     }
 
     // The library passes back the original source buffer (malloced by this app before
-    // gatt_session_fragment_send()) so the correct one is freed. The library has already
+    // gatt_session_send()) so the correct one is freed. The library has already
     // released its internal send-slot state. stream_id identifies which transfer this was.
     if (data) {
         free((void *)data);
@@ -458,7 +458,7 @@ void app_main(void)
             sessions_lock();
             gatt_session_t *session = g_session_instances[i];
             bool ready = g_conn_params_ready[i];
-            if (!session || !ready || !gatt_session_fragment_send_idle(session)) {
+            if (!session || !ready || !gatt_session_send_idle(session)) {
                 sessions_unlock();
                 continue;
             }
@@ -471,7 +471,7 @@ void app_main(void)
             }
             spp_fill_test_buffer(send_buffer, SPP_TEST_TRANSFER_SIZE);
             uint16_t conn_handle = session->conn_handle;
-            ret = gatt_session_fragment_send(session, send_buffer, SPP_TEST_TRANSFER_SIZE, 0xFF, 80);
+            ret = gatt_session_send(session, send_buffer, SPP_TEST_TRANSFER_SIZE, 0xFF, 80);
             sessions_unlock();
             if (ret == ESP_OK) {
                 ESP_LOGI(TAG, "Started send to conn_handle=%d (%d bytes)", conn_handle, SPP_TEST_TRANSFER_SIZE);

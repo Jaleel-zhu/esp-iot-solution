@@ -41,7 +41,8 @@ static inline uint16_t esp_gmp_ota_chunk_for_flash(size_t max_gmp_payload)
         return 1;
     }
     size_t raw = max_gmp_payload - ESP_GMP_OTA_DATA_HDR_LEN;
-    return (uint16_t)((raw / ESP_GMP_OTA_FLASH_WRITE_ALIGN) * ESP_GMP_OTA_FLASH_WRITE_ALIGN);
+    uint16_t aligned = (uint16_t)((raw / ESP_GMP_OTA_FLASH_WRITE_ALIGN) * ESP_GMP_OTA_FLASH_WRITE_ALIGN);
+    return aligned > 0 ? aligned : (uint16_t)raw;
 }
 
 /** Round an existing chunk hint down to flash write alignment (minimum 1). */
@@ -85,9 +86,14 @@ typedef struct {
 } esp_gmp_ota_query_rsp_t;
 
 bool esp_gmp_ota_ctrl_parse_req(const uint8_t *payload, size_t len, esp_gmp_ota_ctrl_req_t *out);
+size_t esp_gmp_ota_ctrl_build_req(uint8_t *buf, size_t buf_sz, const esp_gmp_ota_ctrl_req_t *req);
 size_t esp_gmp_ota_ctrl_build_start_rsp(uint8_t *buf, size_t buf_sz, const esp_gmp_ota_ctrl_rsp_t *rsp);
+bool esp_gmp_ota_ctrl_parse_rsp(const uint8_t *payload, size_t len, esp_gmp_ota_ctrl_rsp_t *out);
 size_t esp_gmp_ota_data_parse_req(const uint8_t *payload, size_t len, esp_gmp_ota_data_req_t *out);
+size_t esp_gmp_ota_data_build_req(uint8_t *buf, size_t buf_sz, const esp_gmp_ota_data_req_t *req);
+bool esp_gmp_ota_data_parse_rsp(const uint8_t *payload, size_t len);
 size_t esp_gmp_ota_query_build_rsp(uint8_t *buf, size_t buf_sz, const esp_gmp_ota_query_rsp_t *rsp);
+bool esp_gmp_ota_query_parse_rsp(const uint8_t *payload, size_t len, esp_gmp_ota_query_rsp_t *out);
 
 #ifdef __cplusplus
 }

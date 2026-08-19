@@ -1,5 +1,17 @@
 # ChangeLog
 
+## v0.0.3 - 2026-08-18
+
+### Breaking Changes:
+
+* Remove deprecated Flux adapter entry points `esp_gmp_flux_on_data_received()` and `esp_gmp_flux_on_session_complete()` from `esp_gmp_flux.h`. Use `esp_gmp_flux_get_gatt_callbacks()` (preferred) or `esp_gmp_flux_get_callbacks()` instead.
+
+### Enhancements:
+
+* Add File Transfer profile under `profiles/file_transfer/` with sender/receiver demos.
+* Support multiple GMP handlers per `group_id`; OTA host self-registers GRP_OTA + GRP_OS.
+* Emit `ESP_GMP_LINK_EVENT_MTU_CHANGED` from the Flux/GATT adapter.
+
 ## v0.0.2 - 2026-07-28
 
 ### Bug Fixes:

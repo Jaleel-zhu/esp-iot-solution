@@ -1,5 +1,11 @@
 # ChangeLog
 
+## v2.0.1 (2026-06-01)
+
+* Fixed asset build cleanup logic to avoid deleting files from the output directory.
+* Standalone `assets_gen.py` now expands `~` in input and output paths before generating the build configuration.
+* Added `MMAP_FILE_ALIGNMENT` to optionally align file payload addresses. The default value `0` disables padding; non-zero values must be powers of two.
+
 ## v1.3.2 (2025-0930)
 * Add function png to pjpg
 * Add flag COPY_PREBUILT_BIN

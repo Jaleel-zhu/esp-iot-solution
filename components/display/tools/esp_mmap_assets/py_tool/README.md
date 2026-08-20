@@ -104,10 +104,11 @@ python assets_gen.py \
 After successful build, the following files will be generated in the output directory:
 
 1. **Binary file**: `<output>` - Packaged assets
-2. **Header file**: `<output_dir>/mmap_generate_<name>.h` - C header file (in the same directory as binary file)
+2. **Header file**: `<output_dir>/include/mmap_generate_<name>.h` - C header file
 3. **Temporary config**: `<output_dir>/.build_config_tmp.json` - Internal temporary configuration
+4. **Temporary build directory**: `<output_dir>/.<output_name>.tmp/` - Internal staging directory used while packaging assets
 
-**Note**: Header files are generated directly in the output directory without creating subdirectories.
+**Note**: The tool only cleans its internal staging directory. It does not remove unrelated files from the directory that contains `<output>`.
 
 ## How It Works
 
@@ -115,7 +116,8 @@ The script will:
 
 1. Create a temporary configuration file from command-line parameters
 2. Call `spiffs_assets_gen.py` for actual building
-3. Save configuration file as `.build_config_tmp.json` in output directory
+3. Copy and convert assets in a dedicated staging directory next to the output file
+4. Save configuration file as `.build_config_tmp.json` in output directory
 
 ## Alternative to CMake Usage
 

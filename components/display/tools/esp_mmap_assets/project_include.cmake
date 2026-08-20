@@ -1,3 +1,31 @@
+function(_esp_mmap_assets_ensure_python_module python_exe pip_package import_module)
+    execute_process(
+        COMMAND ${python_exe} -c "import importlib; importlib.import_module('${import_module}')"
+        RESULT_VARIABLE module_found
+        OUTPUT_QUIET
+        ERROR_QUIET
+    )
+
+    if(NOT module_found EQUAL 0)
+        message(STATUS "${pip_package} not found. Attempting to install it using pip...")
+
+        execute_process(
+            COMMAND ${python_exe} -m pip install -U ${pip_package}
+            RESULT_VARIABLE result
+            OUTPUT_VARIABLE output
+            ERROR_VARIABLE error
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            ERROR_STRIP_TRAILING_WHITESPACE
+        )
+
+        if(result)
+            message(FATAL_ERROR "Failed to install ${pip_package} using pip. Please install it manually.\nError: ${error}")
+        else()
+            message(STATUS "${pip_package} successfully installed.")
+        endif()
+    endif()
+endfunction()
+
 # spiffs_create_partition_assets
 #
 # Create a spiffs image of the specified directory on the host during build and optionally
@@ -17,6 +45,7 @@ function(spiffs_create_partition_assets partition base_dir)
 
     # Define one-value arguments (STRING and INT)
     set(one_value_args MMAP_FILE_SUPPORT_FORMAT
+                       MMAP_FILE_ALIGNMENT
                        MMAP_SPLIT_HEIGHT
                        MMAP_RAW_FILE_FORMAT
                        MMAP_RAW_COLOR_FORMAT
@@ -27,172 +56,131 @@ function(spiffs_create_partition_assets partition base_dir)
     set(multi DEPENDS)
 
     # Parse the arguments passed to the function
-    cmake_parse_arguments(arg
+    cmake_parse_arguments(assets
                           "${options}"
                           "${one_value_args}"
                           "${multi}"
                           "${ARGN}")
 
+    set(copy_prebuilt_bin OFF)
+    if(DEFINED assets_COPY_PREBUILT_BIN AND NOT assets_COPY_PREBUILT_BIN STREQUAL "")
+        set(copy_prebuilt_bin ON)
+    endif()
+    idf_build_get_property(python_exe PYTHON)
+
+    string(TOLOWER "${assets_MMAP_SUPPORT_SJPG}" support_sjpg)
+    string(TOLOWER "${assets_MMAP_SUPPORT_SPNG}" support_spng)
+    string(TOLOWER "${assets_MMAP_SUPPORT_QOI}" support_qoi)
+    string(TOLOWER "${assets_MMAP_SUPPORT_SQOI}" support_sqoi)
+    string(TOLOWER "${assets_MMAP_SUPPORT_PJPG}" support_pjpg)
+    string(TOLOWER "${assets_MMAP_SUPPORT_RAW}" support_raw)
+    string(TOLOWER "${assets_MMAP_RAW_DITHER}" support_raw_dither)
+    string(TOLOWER "${assets_MMAP_RAW_BGR_MODE}" support_raw_bgr)
+
     # Check if COPY_PREBUILT_BIN is enabled (has a path provided)
-    if(DEFINED arg_COPY_PREBUILT_BIN AND NOT arg_COPY_PREBUILT_BIN STREQUAL "")
-        if(NOT EXISTS "${arg_COPY_PREBUILT_BIN}")
-            message(FATAL_ERROR "COPY_PREBUILT_BIN file not found: ${arg_COPY_PREBUILT_BIN}")
+    if(copy_prebuilt_bin)
+        if(NOT EXISTS "${assets_COPY_PREBUILT_BIN}")
+            message(FATAL_ERROR "COPY_PREBUILT_BIN file not found: ${assets_COPY_PREBUILT_BIN}")
         endif()
-        message(STATUS "Copy pre-built bin file: ${arg_COPY_PREBUILT_BIN}")
+        message(STATUS "Copy pre-built bin file: ${assets_COPY_PREBUILT_BIN}")
     endif()
 
     # Skip format and conversion validations for copy mode
-    if(NOT (DEFINED arg_COPY_PREBUILT_BIN AND NOT arg_COPY_PREBUILT_BIN STREQUAL ""))
-        if(NOT DEFINED arg_MMAP_FILE_SUPPORT_FORMAT OR arg_MMAP_FILE_SUPPORT_FORMAT STREQUAL "")
+    if(NOT copy_prebuilt_bin)
+        if(NOT DEFINED assets_MMAP_FILE_SUPPORT_FORMAT OR assets_MMAP_FILE_SUPPORT_FORMAT STREQUAL "")
             message(FATAL_ERROR "MMAP_FILE_SUPPORT_FORMAT is empty. Please input the file suffixes you want (e.g .png, .jpg).")
         endif()
 
-        if(arg_MMAP_SUPPORT_QOI AND (arg_MMAP_SUPPORT_SJPG OR arg_MMAP_SUPPORT_SPNG))
+        if(assets_MMAP_SUPPORT_QOI AND (assets_MMAP_SUPPORT_SJPG OR assets_MMAP_SUPPORT_SPNG))
             message(FATAL_ERROR "MMAP_SUPPORT_QOI depends on !MMAP_SUPPORT_SJPG && !MMAP_SUPPORT_SPNG.")
         endif()
 
-        if(arg_MMAP_SUPPORT_SQOI AND NOT arg_MMAP_SUPPORT_QOI)
+        if(assets_MMAP_SUPPORT_SQOI AND NOT assets_MMAP_SUPPORT_QOI)
             message(FATAL_ERROR "MMAP_SUPPORT_SQOI depends on MMAP_SUPPORT_QOI.")
         endif()
 
-        if( (arg_MMAP_SUPPORT_SJPG OR arg_MMAP_SUPPORT_SPNG OR arg_MMAP_SUPPORT_SQOI) AND
-            (NOT DEFINED arg_MMAP_SPLIT_HEIGHT OR arg_MMAP_SPLIT_HEIGHT LESS 1) )
+        if( (assets_MMAP_SUPPORT_SJPG OR assets_MMAP_SUPPORT_SPNG OR assets_MMAP_SUPPORT_SQOI) AND
+            (NOT DEFINED assets_MMAP_SPLIT_HEIGHT OR assets_MMAP_SPLIT_HEIGHT LESS 1) )
             message(FATAL_ERROR "MMAP_SPLIT_HEIGHT must be defined and its value >= 1 when MMAP_SUPPORT_SJPG, MMAP_SUPPORT_SPNG, or MMAP_SUPPORT_SQOI is enabled.")
         endif()
 
-        if(DEFINED arg_MMAP_SPLIT_HEIGHT)
-            if(NOT (arg_MMAP_SUPPORT_SJPG OR arg_MMAP_SUPPORT_SPNG OR arg_MMAP_SUPPORT_SQOI))
+        if(DEFINED assets_MMAP_SPLIT_HEIGHT)
+            if(NOT (assets_MMAP_SUPPORT_SJPG OR assets_MMAP_SUPPORT_SPNG OR assets_MMAP_SUPPORT_SQOI))
                 message(FATAL_ERROR "MMAP_SPLIT_HEIGHT depends on MMAP_SUPPORT_SJPG || MMAP_SUPPORT_SPNG || MMAP_SUPPORT_SQOI.")
             endif()
         endif()
 
-        if(arg_MMAP_SUPPORT_RAW AND (arg_MMAP_SUPPORT_SJPG OR arg_MMAP_SUPPORT_SPNG OR arg_MMAP_SUPPORT_QOI OR arg_MMAP_SUPPORT_SQOI OR arg_MMAP_SUPPORT_PJPG))
+        if(assets_MMAP_SUPPORT_RAW AND (assets_MMAP_SUPPORT_SJPG OR assets_MMAP_SUPPORT_SPNG OR assets_MMAP_SUPPORT_QOI OR assets_MMAP_SUPPORT_SQOI OR assets_MMAP_SUPPORT_PJPG))
             message(FATAL_ERROR "MMAP_SUPPORT_RAW and MMAP_SUPPORT_SJPG/MMAP_SUPPORT_SPNG/MMAP_SUPPORT_QOI/MMAP_SUPPORT_SQOI/MMAP_SUPPORT_PJPG cannot be enabled at the same time.")
         endif()
 
-        # Try to install Pillow using pip
-        idf_build_get_property(python PYTHON)
-        execute_process(
-            COMMAND ${python} -c "import PIL"
-            RESULT_VARIABLE PIL_FOUND
-            OUTPUT_QUIET
-            ERROR_QUIET
-        )
-
-        if(NOT PIL_FOUND EQUAL 0)
-            message(STATUS "Pillow not found. Attempting to install it using pip...")
-
-            execute_process(
-                COMMAND ${python} -m pip install -U Pillow
-                RESULT_VARIABLE result
-                OUTPUT_VARIABLE output
-                ERROR_VARIABLE error
-                OUTPUT_STRIP_TRAILING_WHITESPACE
-                ERROR_STRIP_TRAILING_WHITESPACE
-            )
-
-            if(result)
-                message(FATAL_ERROR "Failed to install Pillow using pip. Please install it manually.\nError: ${error}")
-            else()
-                message(STATUS "Pillow successfully installed.")
-            endif()
+        # Install Python dependencies required by enabled converters.
+        string(FIND ",${assets_MMAP_FILE_SUPPORT_FORMAT}," ".jpg" support_jpg_pos)
+        string(FIND ",${assets_MMAP_FILE_SUPPORT_FORMAT}," ".jpeg" support_jpeg_pos)
+        string(FIND ",${assets_MMAP_FILE_SUPPORT_FORMAT}," ".png" support_png_pos)
+        if(assets_MMAP_SUPPORT_SJPG OR assets_MMAP_SUPPORT_SPNG OR assets_MMAP_SUPPORT_QOI OR
+           assets_MMAP_SUPPORT_SQOI OR assets_MMAP_SUPPORT_PJPG OR assets_MMAP_SUPPORT_RAW OR
+           NOT support_jpg_pos EQUAL -1 OR NOT support_jpeg_pos EQUAL -1 OR NOT support_png_pos EQUAL -1)
+            _esp_mmap_assets_ensure_python_module(${python_exe} "Pillow" "PIL")
         endif()
 
-        execute_process(
-            COMMAND ${python} -c "import numpy"
-            RESULT_VARIABLE NUMPY_FOUND
-            OUTPUT_QUIET
-            ERROR_QUIET
-        )
-
-        if(NOT NUMPY_FOUND EQUAL 0)
-            message(STATUS "NumPy not found. Attempting to install it using pip...")
-
-            execute_process(
-                COMMAND ${python} -m pip install -U numpy
-                RESULT_VARIABLE result
-                OUTPUT_VARIABLE output
-                ERROR_VARIABLE error
-                OUTPUT_STRIP_TRAILING_WHITESPACE
-                ERROR_STRIP_TRAILING_WHITESPACE
-            )
-
-            if(result)
-                message(FATAL_ERROR "Failed to install NumPy using pip. Please install it manually.\nError: ${error}")
-            else()
-                message(STATUS "NumPy successfully installed.")
-            endif()
+        if(assets_MMAP_SUPPORT_QOI OR assets_MMAP_SUPPORT_SQOI OR assets_MMAP_SUPPORT_PJPG)
+            _esp_mmap_assets_ensure_python_module(${python_exe} "numpy" "numpy")
         endif()
 
-        # Try to install qoi-conv using pip
-        execute_process(
-            COMMAND ${python} -c "import importlib; importlib.import_module('qoi-conv')"
-            RESULT_VARIABLE PIL_FOUND
-            OUTPUT_QUIET
-            ERROR_QUIET
-        )
+        if(assets_MMAP_SUPPORT_QOI OR assets_MMAP_SUPPORT_SQOI)
+            _esp_mmap_assets_ensure_python_module(${python_exe} "qoi-conv" "qoi-conv.qoi")
+        endif()
 
-        if(NOT PIL_FOUND EQUAL 0)
-            message(STATUS "qoi-conv not found. Attempting to install it using pip...")
-
-            execute_process(
-                COMMAND ${python} -m pip install -U qoi-conv
-                RESULT_VARIABLE result
-                OUTPUT_VARIABLE output
-                ERROR_VARIABLE error
-                OUTPUT_STRIP_TRAILING_WHITESPACE
-                ERROR_STRIP_TRAILING_WHITESPACE
-            )
-
-            if(result)
-                message(FATAL_ERROR "Failed to install qoi-conv using pip. Please install it manually.\nError: ${error}")
-            else()
-                message(STATUS "qoi-conv successfully installed.")
-            endif()
+        if(assets_MMAP_SUPPORT_RAW)
+            _esp_mmap_assets_ensure_python_module(${python_exe} "packaging" "packaging")
         endif()
     endif()
 
     get_filename_component(base_dir_full_path ${base_dir} ABSOLUTE)
     get_filename_component(base_dir_name "${base_dir_full_path}" NAME)
+    if(NOT copy_prebuilt_bin)
+        file(GLOB_RECURSE asset_dependencies CONFIGURE_DEPENDS "${base_dir_full_path}/*")
+    endif()
 
-    partition_table_get_partition_info(size "--partition-name ${partition}" "size")
-    partition_table_get_partition_info(offset "--partition-name ${partition}" "offset")
+    partition_table_get_partition_info(partition_size "--partition-name ${partition}" "size")
+    partition_table_get_partition_info(partition_offset "--partition-name ${partition}" "offset")
 
-    if("${size}" AND "${offset}")
+    if("${partition_size}" AND "${partition_offset}")
 
-        set(TARGET_COMPONENT "")
-        set(TARGET_COMPONENT_PATH "")
+        set(target_component "")
+        set(target_component_path "")
 
         idf_build_get_property(build_components BUILD_COMPONENTS)
-        foreach(COMPONENT ${build_components})
-            if(COMPONENT MATCHES "esp_mmap_assets" OR COMPONENT MATCHES "espressif__esp_mmap_assets")
-                set(TARGET_COMPONENT ${COMPONENT})
+        foreach(component ${build_components})
+            if(component MATCHES "esp_mmap_assets" OR component MATCHES "espressif__esp_mmap_assets")
+                set(target_component ${component})
                 break()
             endif()
         endforeach()
 
-        if(TARGET_COMPONENT STREQUAL "")
+        if(target_component STREQUAL "")
             message(FATAL_ERROR "Component 'esp_mmap_assets' not found.")
         else()
-            idf_component_get_property(TARGET_COMPONENT_PATH ${TARGET_COMPONENT} COMPONENT_DIR)
+            idf_component_get_property(target_component_path ${target_component} COMPONENT_DIR)
         endif()
 
-        get_filename_component(PY_TOOL_DIR "${TARGET_COMPONENT_PATH}/py_tool" ABSOLUTE)
+        get_filename_component(py_tool_dir "${target_component_path}/py_tool" ABSOLUTE)
 
         set(image_file ${CMAKE_BINARY_DIR}/mmap_build/${base_dir_name}/${partition}/${partition}.bin)
-        set(MVMODEL_EXE ${PY_TOOL_DIR}/spiffs_assets_gen.py)
+        set(assets_gen_script ${py_tool_dir}/spiffs_assets_gen.py)
 
-        if(arg_MMAP_SUPPORT_RAW AND NOT (DEFINED arg_COPY_PREBUILT_BIN AND NOT arg_COPY_PREBUILT_BIN STREQUAL ""))
-            foreach(COMPONENT ${build_components})
-            if(COMPONENT MATCHES "^lvgl$" OR COMPONENT MATCHES "^lvgl__lvgl$")
-                set(lvgl_name ${COMPONENT})
-                if(COMPONENT STREQUAL "lvgl")
-                    set(lvgl_ver $ENV{LVGL_VERSION})
-                else()
-                    idf_component_get_property(lvgl_ver ${lvgl_name} COMPONENT_VERSION)
+        if(assets_MMAP_SUPPORT_RAW AND NOT copy_prebuilt_bin)
+            foreach(component ${build_components})
+                if(component MATCHES "^lvgl$" OR component MATCHES "^lvgl__lvgl$")
+                    set(lvgl_name ${component})
+                    if(component STREQUAL "lvgl")
+                        set(lvgl_ver $ENV{LVGL_VERSION})
+                    else()
+                        idf_component_get_property(lvgl_ver ${lvgl_name} COMPONENT_VERSION)
+                    endif()
+                    break()
                 endif()
-                break()
-            endif()
             endforeach()
 
             if("${lvgl_ver}" STREQUAL "")
@@ -202,72 +190,69 @@ function(spiffs_create_partition_assets partition base_dir)
             message(STATUS "LVGL version: ${lvgl_ver}")
         endif()
 
-        if(NOT arg_MMAP_SPLIT_HEIGHT)
-            set(arg_MMAP_SPLIT_HEIGHT 0) # Default value
+        if(NOT assets_MMAP_SPLIT_HEIGHT)
+            set(assets_MMAP_SPLIT_HEIGHT 0) # Default value
+        endif()
+        if(NOT DEFINED assets_MMAP_FILE_ALIGNMENT OR assets_MMAP_FILE_ALIGNMENT STREQUAL "")
+            set(assets_MMAP_FILE_ALIGNMENT 0)
         endif()
 
         # Handle IMPORT_INC_PATH parameter
-        if(DEFINED arg_IMPORT_INC_PATH)
-            set(import_include_path ${arg_IMPORT_INC_PATH})
+        if(DEFINED assets_IMPORT_INC_PATH)
+            set(import_include_path ${assets_IMPORT_INC_PATH})
         else()
             set(import_include_path ${CMAKE_CURRENT_LIST_DIR})
         endif()
 
-        string(TOLOWER "${arg_MMAP_SUPPORT_SJPG}" support_sjpg)
-        string(TOLOWER "${arg_MMAP_SUPPORT_SPNG}" support_spng)
-        string(TOLOWER "${arg_MMAP_SUPPORT_QOI}" support_qoi)
-        string(TOLOWER "${arg_MMAP_SUPPORT_SQOI}" support_sqoi)
-        string(TOLOWER "${arg_MMAP_SUPPORT_PJPG}" support_pjpg)
-        string(TOLOWER "${arg_MMAP_SUPPORT_RAW}" support_raw)
-        string(TOLOWER "${arg_MMAP_RAW_DITHER}" support_raw_dither)
-        string(TOLOWER "${arg_MMAP_RAW_BGR_MODE}" support_raw_bgr)
-
         set(app_bin_path "${CMAKE_BINARY_DIR}/${CMAKE_PROJECT_NAME}.bin")
-        if(DEFINED arg_COPY_PREBUILT_BIN AND NOT arg_COPY_PREBUILT_BIN STREQUAL "")
-            set(source_bin_path "${arg_COPY_PREBUILT_BIN}")
+        if(copy_prebuilt_bin)
+            set(source_bin_path "${assets_COPY_PREBUILT_BIN}")
         else()
             set(source_bin_path "")
         endif()
 
-        set(CONFIG_DIR "${CMAKE_BINARY_DIR}/mmap_build/${base_dir_name}")
-        file(MAKE_DIRECTORY "${CONFIG_DIR}")
-        set(CONFIG_FILE_PATH "${CONFIG_DIR}/${partition}.json")
-        set(PJPG_PROCESSOR_PATH "${PY_TOOL_DIR}/png_processor.py")
-        set(partition ${partition})
+        set(config_dir "${CMAKE_BINARY_DIR}/mmap_build/${base_dir_name}")
+        file(MAKE_DIRECTORY "${config_dir}")
+        set(config_file_path "${config_dir}/${partition}.json")
+        set(pjpg_processor_path "${py_tool_dir}/png_processor.py")
 
         configure_file(
-            "${TARGET_COMPONENT_PATH}/config_template.json.in"
-            "${CONFIG_FILE_PATH}"
+            "${target_component_path}/config_template.json.in"
+            "${config_file_path}"
             @ONLY
         )
 
-        if(DEFINED arg_COPY_PREBUILT_BIN AND NOT arg_COPY_PREBUILT_BIN STREQUAL "")
-            add_custom_target(assets_${partition}_bin ALL
+        if(copy_prebuilt_bin)
+            add_custom_command(
+                OUTPUT "${image_file}"
                 COMMENT "Copy prebuilt binary"
-                COMMAND ${python} ${MVMODEL_EXE} --config "${CONFIG_FILE_PATH}" --copy
-                DEPENDS ${arg_DEPENDS}
+                COMMAND ${python_exe} ${assets_gen_script} --config "${config_file_path}" --copy
+                DEPENDS "${assets_COPY_PREBUILT_BIN}" "${config_file_path}" "${assets_gen_script}" ${assets_DEPENDS}
                 VERBATIM)
         else()
-            add_custom_target(assets_${partition}_bin ALL
+            add_custom_command(
+                OUTPUT "${image_file}"
                 COMMENT "Build assets binary"
-                COMMAND ${python} ${MVMODEL_EXE} --config "${CONFIG_FILE_PATH}" --build
-                DEPENDS ${arg_DEPENDS}
+                COMMAND ${python_exe} ${assets_gen_script} --config "${config_file_path}" --build
+                DEPENDS "${config_file_path}" "${assets_gen_script}" ${asset_dependencies} ${assets_DEPENDS}
                 VERBATIM)
         endif()
 
-        if(arg_FLASH_APPEND_APP)
+        add_custom_target(assets_${partition}_bin ALL DEPENDS "${image_file}")
+
+        if(assets_FLASH_APPEND_APP)
             add_custom_target(assets_${partition}_merge_bin ALL
             COMMENT "Merge binary files"
-            COMMAND ${python} ${MVMODEL_EXE} --config "${CONFIG_FILE_PATH}" --merge
-            COMMAND ${CMAKE_COMMAND} -E rm "${build_dir}/.bin_timestamp" # Remove the timestamp file to force re-run
+            COMMAND ${python_exe} ${assets_gen_script} --config "${config_file_path}" --merge
+            COMMAND ${CMAKE_COMMAND} -E rm -f "${CMAKE_BINARY_DIR}/.bin_timestamp" # Remove the timestamp file to force re-run
             DEPENDS assets_${partition}_bin app
             VERBATIM)
         endif()
 
-        if(arg_FLASH_IN_PROJECT)
+        if(assets_FLASH_IN_PROJECT)
             set(assets_target "assets_${partition}_bin")
 
-            if(arg_FLASH_APPEND_APP)
+            if(assets_FLASH_APPEND_APP)
                 set(assets_target "assets_${partition}_merge_bin")
                 add_dependencies(app-flash ${assets_target})
             else()
@@ -278,8 +263,8 @@ function(spiffs_create_partition_assets partition base_dir)
         endif()
 
     else()
-        set(message "Failed to create assets bin for partition '${partition}'. "
-                    "Check project configuration if using the correct partition table file.")
-        fail_at_build_time(assets_${partition}_bin "${message}")
+        set(error_message "Failed to create assets bin for partition '${partition}'. "
+                          "Check project configuration if using the correct partition table file.")
+        fail_at_build_time(assets_${partition}_bin "${error_message}")
     endif()
 endfunction()

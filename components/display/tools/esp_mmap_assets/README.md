@@ -58,6 +58,7 @@ set(options
 ```c
 set(one_value_args
     MMAP_FILE_SUPPORT_FORMAT,
+    MMAP_FILE_ALIGNMENT,
     MMAP_SPLIT_HEIGHT,
     MMAP_RAW_FILE_FORMAT
     IMPORT_INC_PATH
@@ -73,6 +74,9 @@ set(one_value_args
 - **`IMPORT_INC_PATH`**: Target path for generated include files. Defaults to referencing component location.
 - **`COPY_PREBUILT_BIN`**: Copies pre-generated binary files to target directory. This option allows you to use externally generated asset binaries instead of building them from source files.
 - **`MMAP_FILE_SUPPORT_FORMAT`**: Specifies supported file formats (e.g., `.png`, `.jpg`, `.ttf`).
+- **`MMAP_FILE_ALIGNMENT`**: Optional power-of-two alignment for the address
+  returned by `mmap_assets_get_mem()`. Defaults to `0`, which preserves the
+  compact legacy layout without padding.
 - **`MMAP_SPLIT_HEIGHT`**: Defines height for image splitting to reduce memory usage. Depends on:
   - `MMAP_SUPPORT_SJPG`
   - `MMAP_SUPPORT_SPNG`
@@ -88,6 +92,7 @@ set(one_value_args
         my_folder
         FLASH_IN_PROJECT
         MMAP_FILE_SUPPORT_FORMAT ".jpg,.png,.ttf"
+        MMAP_FILE_ALIGNMENT 64
    )
     ```
 
@@ -111,6 +116,10 @@ set(one_value_args
         COPY_PREBUILT_BIN "${ASSETS_DIR}/prebuilt.bin"
     )
     ```
+
+#### Generated Files and Cleanup
+
+During asset packaging, the generator copies and converts source assets in an internal staging directory under the output directory, for example `<output_dir>/.<output_name>.tmp/`. Only this staging directory is cleaned before each build. The directory that contains the final binary is not cleaned, so unrelated files next to the output binary are preserved.
 
 #### Supported Image Formats
 

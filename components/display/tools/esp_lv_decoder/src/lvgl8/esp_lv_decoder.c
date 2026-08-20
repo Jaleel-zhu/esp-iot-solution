@@ -20,7 +20,6 @@
 
 #include "png.h"
 #include "esp_jpeg_dec.h"
-#define QOI_IMPLEMENTATION
 #include "qoi.h"
 
 #if ESP_LV_ENABLE_HW_JPEG

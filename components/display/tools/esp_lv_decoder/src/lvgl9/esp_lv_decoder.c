@@ -29,7 +29,6 @@
 #include "esp_jpeg_common.h"
 #endif
 #include "png.h"
-#define QOI_IMPLEMENTATION
 #include "qoi.h"
 
 #define DECODER_NAME    "esp_decoder"

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2024-2025 Espressif Systems (Shanghai) CO LTD
+# SPDX-FileCopyrightText: 2024-2026 Espressif Systems (Shanghai) CO LTD
 # SPDX-License-Identifier: Apache-2.0
 import io
 import os
@@ -8,23 +8,63 @@ import shutil
 import math
 import sys
 import time
-import numpy as np
 import importlib
 import subprocess
 import urllib.request
 
-from PIL import Image
 from datetime import datetime
 from dataclasses import dataclass
 from typing import List
 from pathlib import Path
-from packaging import version
 
 sys.dont_write_bytecode = True
 
 GREEN = '\033[1;32m'
 RED = '\033[1;31m'
 RESET = '\033[0m'
+
+_image_module = None
+_numpy_module = None
+_packaging_version = None
+
+def get_image_module(required=True):
+    global _image_module
+    if _image_module is not None:
+        return _image_module
+    try:
+        from PIL import Image
+    except ImportError:
+        if required:
+            print(f'{RED}Error: Pillow is required when building or converting image assets. '
+                  f'Install it with: pip install Pillow{RESET}')
+            sys.exit(1)
+        return None
+    _image_module = Image
+    return _image_module
+
+def get_numpy_module():
+    global _numpy_module
+    if _numpy_module is None:
+        try:
+            import numpy as np
+        except ImportError:
+            print(f'{RED}Error: NumPy is required when converting QOI image assets. '
+                  f'Install it with: pip install numpy{RESET}')
+            sys.exit(1)
+        _numpy_module = np
+    return _numpy_module
+
+def get_packaging_version():
+    global _packaging_version
+    if _packaging_version is None:
+        try:
+            from packaging import version
+        except ImportError:
+            print(f'{RED}Error: packaging is required when converting raw image assets. '
+                  f'Install it with: pip install packaging{RESET}')
+            sys.exit(1)
+        _packaging_version = version
+    return _packaging_version
 
 @dataclass
 class AssetCopyConfig:
@@ -35,7 +75,7 @@ class AssetCopyConfig:
     qoi_enable: bool
     sqoi_enable: bool
     pjpg_enable: bool
-    row_enable: bool
+    raw_enable: bool
     support_format: List[str]
     split_height: int
 
@@ -46,6 +86,7 @@ class PackModelsConfig:
     image_file: str
     assets_path: str
     name_length: int
+    file_alignment: int = 0
 
 def generate_header_filename(path):
     asset_name = os.path.basename(path)
@@ -60,6 +101,38 @@ def compute_checksum(data):
 def sort_key(filename):
     basename, extension = os.path.splitext(filename)
     return extension, basename
+
+def normalize_path(path):
+    return os.path.abspath(os.path.expanduser(path))
+
+def get_assets_build_dir(config_data, image_file):
+    target_path = config_data.get('target_path')
+    if target_path:
+        return normalize_path(target_path)
+
+    output_path = normalize_path(image_file)
+    output_dir = os.path.dirname(output_path) or os.getcwd()
+    output_name = os.path.basename(output_path) or 'assets'
+    return os.path.join(output_dir, f'.{output_name}.tmp')
+
+def clean_directory(path):
+    real_path = os.path.realpath(path)
+    forbidden_paths = {
+        os.path.realpath(os.path.abspath(os.sep)),
+        os.path.realpath(os.path.expanduser('~')),
+    }
+
+    if real_path in forbidden_paths or len(Path(real_path).parts) <= 2:
+        print(f'{RED}Error: Refusing to clean unsafe path: {real_path}{RESET}')
+        sys.exit(1)
+
+    os.makedirs(path, exist_ok=True)
+    for filename in os.listdir(path):
+        file_path = os.path.join(path, filename)
+        if os.path.isfile(file_path) or os.path.islink(file_path):
+            os.unlink(file_path)
+        elif os.path.isdir(file_path):
+            shutil.rmtree(file_path)
 
 def download_v8_script(convert_path):
     """
@@ -162,6 +235,8 @@ def split_image(im, block_size, input_dir, ext, convert_to_qoi):
         replace_extension = qoi_module.replace_extension
 
         if convert_to_qoi:
+            Image = get_image_module()
+            np = get_numpy_module()
             with Image.open(output_path) as img:
                 if img.mode != 'RGBA':
                     img = img.convert('RGBA')
@@ -316,6 +391,7 @@ def process_image(input_file, height_str, output_extension, convert_to_qoi=False
     OUTPUT_FILE_NAME = base_filename
 
     try:
+        Image = get_image_module()
         im = Image.open(input_file)
     except Exception as e:
         print('Error:', e)
@@ -374,8 +450,9 @@ def convert_image_to_raw(input_file: str) -> None:
     lvgl_ver_str = config_data.get('lvgl_ver', '9.0.0')
 
     try:
+        version = get_packaging_version()
         lvgl_version = version.parse(lvgl_ver_str)
-    except version.InvalidVersion:
+    except get_packaging_version().InvalidVersion:
         print(f'Invalid LVGL version format: {lvgl_ver_str}')
         sys.exit(1)
 
@@ -405,8 +482,7 @@ def pack_assets(config: PackModelsConfig):
     assets_path = config.assets_path
     max_name_len = config.name_length
 
-    merged_data = bytearray()
-    file_info_list = []
+    asset_files = []
     skip_files = ['config.json', 'lvgl_image_converter']
 
     file_list = sorted(os.listdir(target_path), key=sort_key)
@@ -419,6 +495,9 @@ def pack_assets(config: PackModelsConfig):
         file_size = os.path.getsize(file_path)
 
         try:
+            Image = get_image_module(required=False)
+            if Image is None:
+                raise ImportError('Pillow is not installed')
             img = Image.open(file_path)
             width, height = img.size
         except Exception as e:
@@ -443,19 +522,32 @@ def pack_assets(config: PackModelsConfig):
             else:
                 width, height = 0, 0
 
-        file_info_list.append((file_name, len(merged_data), file_size, width, height))
-        # Add 0x5A5A prefix to merged_data
-        merged_data.extend(b'\x5A' * 2)
-
         with open(file_path, 'rb') as bin_file:
             bin_data = bin_file.read()
 
-        merged_data.extend(bin_data)
+        asset_files.append((file_name, file_size, width, height, bin_data))
 
-    actual_max_name = max([len(f[0]) for f in file_info_list]) if file_info_list else 15
+    actual_max_name = max([len(f[0]) for f in asset_files]) if asset_files else 15
     max_name_len = (actual_max_name + 1 + 3) & ~3
 
-    total_files = len(file_info_list)
+    total_files = len(asset_files)
+    file_alignment = config.file_alignment
+    if file_alignment < 0 or (
+            file_alignment != 0 and file_alignment & (file_alignment - 1)):
+        raise ValueError('file_alignment must be 0 or a power of two')
+
+    merged_data = bytearray()
+    file_info_list = []
+    data_base = 32 + total_files * (max_name_len + 12)
+    for file_name, file_size, width, height, bin_data in asset_files:
+        if file_alignment:
+            padding = (-(data_base + len(merged_data) + 2)) % file_alignment
+            merged_data.extend(b'\0' * padding)
+        file_info_list.append(
+            (file_name, len(merged_data), file_size, width, height))
+        # mmap_assets_get_mem() skips this 0x5A5A file marker.
+        merged_data.extend(b'\x5A' * 2)
+        merged_data.extend(bin_data)
 
     mmap_table = bytearray()
     for file_name, offset, file_size, width, height in file_info_list:
@@ -547,6 +639,9 @@ def copy_assets(config: AssetCopyConfig):
                             # Default threshold is 128x128; can be overridden by config key 'pjpg_min_side'
                             min_side = int(config_data.get('pjpg_min_side', 128))
                             try:
+                                Image = get_image_module(required=False)
+                                if Image is None:
+                                    raise ImportError('Pillow is not installed')
                                 with Image.open(target_file) as _im_probe:
                                     _w, _h = _im_probe.size
                                 if _w < min_side or _h < min_side:
@@ -586,17 +681,17 @@ def copy_assets(config: AssetCopyConfig):
                     converted = True
                     break
 
-            if not converted and config.row_enable:
+            if not converted and config.raw_enable:
                 convert_image_to_raw(target_file)
                 os.remove(target_file)
         else:
             print(f'No match found for file: {filename}, format_tuple: {format_tuple}')
 
 def process_assets_build(config_data):
-    assets_path = config_data['assets_path']
-    image_file = config_data['image_file']
-    target_path = os.path.dirname(image_file)
-    include_path = config_data['include_path']
+    assets_path = normalize_path(config_data['assets_path'])
+    image_file = normalize_path(config_data['image_file'])
+    target_path = get_assets_build_dir(config_data, image_file)
+    include_path = normalize_path(config_data['include_path'])
     name_length = config_data['name_length']
     split_height = config_data['split_height']
     support_format = [fmt.strip() for fmt in config_data['support_format'].split(',')]
@@ -609,7 +704,7 @@ def process_assets_build(config_data):
         qoi_enable=config_data['support_qoi'],
         sqoi_enable=config_data['support_sqoi'],
         pjpg_enable=config_data.get('support_pjpg', False),
-        row_enable=config_data['support_raw'],
+        raw_enable=config_data['support_raw'],
         support_format=support_format,
         split_height=split_height
     )
@@ -619,7 +714,8 @@ def process_assets_build(config_data):
         include_path=include_path,
         image_file=image_file,
         assets_path=assets_path,
-        name_length=name_length
+        name_length=name_length,
+        file_alignment=int(config_data.get('file_alignment', 0))
     )
 
     print('--support_format:', support_format)
@@ -629,23 +725,16 @@ def process_assets_build(config_data):
         print('--support_sjpg:', copy_config.sjpg_enable)
         print('--support_qoi:', copy_config.qoi_enable)
         print('--support_pjpg:', copy_config.pjpg_enable)
-        print('--support_raw:', copy_config.row_enable)
+        print('--support_raw:', copy_config.raw_enable)
 
         if copy_config.sqoi_enable:
             print('--support_sqoi:', copy_config.sqoi_enable)
         if copy_config.spng_enable or copy_config.sjpg_enable or copy_config.sqoi_enable:
             print('--split_height:', copy_config.split_height)
-        if copy_config.row_enable:
+        if copy_config.raw_enable:
             print('--lvgl_version:', config_data['lvgl_ver'])
 
-    if not os.path.exists(target_path):
-        os.makedirs(target_path, exist_ok=True)
-    for filename in os.listdir(target_path):
-        file_path = os.path.join(target_path, filename)
-        if os.path.isfile(file_path) or os.path.islink(file_path):
-            os.unlink(file_path)
-        elif os.path.isdir(file_path):
-            shutil.rmtree(file_path)
+    clean_directory(target_path)
 
     copy_assets(copy_config)
     pack_assets(pack_config)

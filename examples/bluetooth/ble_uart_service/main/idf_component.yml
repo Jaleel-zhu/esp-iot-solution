@@ -8,6 +8,10 @@ dependencies:
   espressif2022/esp_emote_gen_player:
     version: "*"
 
+  espressif/esp_mmap_assets:
+    version: "*"
+    override_path: "../../../../components/display/tools/esp_mmap_assets"
+
   espressif/esp_vocat:
     version: "*"
 

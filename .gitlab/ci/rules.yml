@@ -1166,6 +1166,8 @@
       changes: *patterns-build_system
     - <<: *if-dev-push
       changes: *patterns-example_bluetooth_ble_uart_service
+    - <<: *if-dev-push
+      changes: *patterns-components_display_tools_esp_mmap_assets
 
 .rules:build:example_bluetooth_ble_l2cap_coc:
   rules:
@@ -1458,6 +1460,8 @@
       changes: *patterns-example_display_gui_lvgl_eaf_player
     - <<: *if-dev-push
       changes: *patterns-components_display_tools_esp_lv_eaf_player
+    - <<: *if-dev-push
+      changes: *patterns-components_display_tools_esp_mmap_assets
 
 .rules:build:example_display_gui_lvgl_fs_assets:
   rules:
@@ -1482,6 +1486,8 @@
       changes: *patterns-example_display_gui_lvgl_lottie_player
     - <<: *if-dev-push
       changes: *patterns-components_display_tools_esp_lv_lottie_player
+    - <<: *if-dev-push
+      changes: *patterns-components_display_tools_esp_mmap_assets
 
 .rules:build:example_display_gui_esp_painter_demo:
   rules:
@@ -2922,6 +2928,8 @@
       changes: *patterns-build_system
     - <<: *if-dev-push
       changes: *patterns-components_display_tools_esp_lvgl_adapter
+    - <<: *if-dev-push
+      changes: *patterns-components_display_tools_esp_mmap_assets
 
 .rules:build:components_display_tools_esp_lvgl_adapter_benchmark:
   rules:

@@ -400,7 +400,6 @@ build_example_bluetooth_ble_uart_service:
   variables:
     EXAMPLE_DIR: examples/bluetooth/ble_uart_service
     EXAMPLE_APPEND_ARGS: "--ignore-warnings"
-    EXAMPLE_PYTHON_DEPS: "numpy Pillow"
 
 build_example_camera_basic:
   extends:

@@ -86,7 +86,7 @@ def find_spiffs_gen_script():
 def create_default_config(args):
     """Create a temporary configuration file from command line arguments"""
     # Validate assets path
-    assets_path = os.path.abspath(args.assets_path)
+    assets_path = os.path.abspath(os.path.expanduser(args.assets_path))
     if not os.path.exists(assets_path):
         print(f'{RED}Error: Assets directory does not exist: {assets_path}{RESET}')
         print(f'{YELLOW}Please create the directory or check the path.{RESET}')
@@ -97,7 +97,7 @@ def create_default_config(args):
         sys.exit(1)
 
     # Get absolute paths
-    output_path = os.path.abspath(args.output)
+    output_path = os.path.abspath(os.path.expanduser(args.output))
     output_dir = os.path.dirname(output_path)
 
     # Auto-detect pjpg processor path
